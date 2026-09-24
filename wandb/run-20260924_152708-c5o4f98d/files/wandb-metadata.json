@@ -1,0 +1,31 @@
+{
+  "os":  "macOS-26.6.2-arm64-arm-64bit",
+  "python":  "CPython 3.11.15",
+  "startedAt":  "2026-09-24T11:27:08.105796Z",
+  "args":  [
+    "--policy",
+    "random",
+    "--num-eval",
+    "50"
+  ],
+  "program":  "/Users/bayesian_monster/gplan/gplaner/eval.py",
+  "codePath":  "gplaner/eval.py",
+  "codePathLocal":  "gplaner/eval.py",
+  "email":  "yavmaksimov@edu.hse.ru",
+  "root":  "/Users/bayesian_monster/gplan",
+  "host":  "MacBook-Pro-123.local",
+  "executable":  "/Users/bayesian_monster/anaconda3/envs/DLA/bin/python",
+  "cpu_count":  12,
+  "cpu_count_logical":  12,
+  "disk":  {
+    "/":  {
+      "total":  "494384795648",
+      "used":  "262226145280"
+    }
+  },
+  "memory":  {
+    "total":  "25769803776"
+  },
+  "apple":  {},
+  "writerId":  "jyau07jmpqbrpg6ewr8iayfd8pupfs1n"
+}

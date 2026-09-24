@@ -1,0 +1,88 @@
+_wandb:
+    value:
+        cli_version: 0.21.0
+        e:
+            ii6m0l4mgcgt11srl1z3t9uvy1k9vtaq:
+                apple: {}
+                args:
+                    - --policy
+                    - gflow
+                    - --num-eval
+                    - "50"
+                    - --num-samples
+                    - "64"
+                codePath: gplaner/eval.py
+                codePathLocal: gplaner/eval.py
+                cpu_count: 12
+                cpu_count_logical: 12
+                disk:
+                    /:
+                        total: "494384795648"
+                        used: "262243086336"
+                email: yavmaksimov@edu.hse.ru
+                executable: /Users/bayesian_monster/anaconda3/envs/DLA/bin/python
+                host: MacBook-Pro-123.local
+                memory:
+                    total: "25769803776"
+                os: macOS-26.6.2-arm64-arm-64bit
+                program: /Users/bayesian_monster/gplan/gplaner/eval.py
+                python: CPython 3.11.15
+                root: /Users/bayesian_monster/gplan
+                startedAt: "2026-09-24T11:27:34.906498Z"
+                writerId: ii6m0l4mgcgt11srl1z3t9uvy1k9vtaq
+        m: []
+        python_version: 3.11.15
+        t:
+            "1":
+                - 1
+                - 41
+                - 105
+            "2":
+                - 1
+                - 11
+                - 12
+                - 41
+                - 49
+                - 71
+                - 105
+            "3":
+                - 2
+                - 16
+            "4": 3.11.15
+            "5": 0.21.0
+            "12": 0.21.0
+            "13": darwin-arm64
+action_block:
+    value: 5
+dataset:
+    value: tworoom
+device:
+    value: cpu
+env:
+    value: swm/TwoRoom-v1
+eval_budget:
+    value: 50
+goal_offset:
+    value: 25
+horizon:
+    value: 5
+img_size:
+    value: 224
+num_eval:
+    value: 50
+num_samples:
+    value: 64
+planner:
+    value: null
+policy:
+    value: gflow
+seed:
+    value: 42
+video_dir:
+    value: null
+wandb_mode:
+    value: online
+wandb_project:
+    value: gplan
+wm:
+    value: tworoom/lewm

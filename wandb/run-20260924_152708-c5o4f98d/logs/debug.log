@@ -1,0 +1,28 @@
+2026-09-24 15:27:08,108 INFO    MainThread:25357 [wandb_setup.py:_flush():80] Current SDK version is 0.21.0
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_setup.py:_flush():80] Configure stats pid to 25357
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_setup.py:_flush():80] Loading settings from /Users/bayesian_monster/.config/wandb/settings
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_setup.py:_flush():80] Loading settings from /Users/bayesian_monster/gplan/wandb/settings
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_init.py:setup_run_log_directory():703] Logging user logs to /Users/bayesian_monster/gplan/wandb/run-20260924_152708-c5o4f98d/logs/debug.log
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_init.py:setup_run_log_directory():704] Logging internal logs to /Users/bayesian_monster/gplan/wandb/run-20260924_152708-c5o4f98d/logs/debug-internal.log
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_init.py:init():830] calling init triggers
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_init.py:init():835] wandb.init called with sweep_config: {}
+config: {'policy': 'random', 'planner': None, 'wm': 'tworoom/lewm', 'dataset': 'tworoom', 'env': 'swm/TwoRoom-v1', 'num_eval': 50, 'goal_offset': 25, 'eval_budget': 50, 'horizon': 5, 'action_block': 5, 'num_samples': 64, 'img_size': 224, 'seed': 42, 'device': 'cpu', 'video_dir': None, 'wandb_project': 'gplan', 'wandb_mode': 'online', '_wandb': {}}
+2026-09-24 15:27:08,109 INFO    MainThread:25357 [wandb_init.py:init():871] starting backend
+2026-09-24 15:27:09,375 INFO    MainThread:25357 [wandb_init.py:init():874] sending inform_init request
+2026-09-24 15:27:09,398 INFO    MainThread:25357 [wandb_init.py:init():882] backend started and connected
+2026-09-24 15:27:09,401 INFO    MainThread:25357 [wandb_init.py:init():953] updated telemetry
+2026-09-24 15:27:09,401 INFO    MainThread:25357 [wandb_init.py:init():977] communicating run to backend with 90.0 second timeout
+2026-09-24 15:27:11,815 INFO    MainThread:25357 [wandb_init.py:init():1029] starting run threads in backend
+2026-09-24 15:27:11,960 INFO    MainThread:25357 [wandb_run.py:_console_start():2458] atexit reg
+2026-09-24 15:27:11,960 INFO    MainThread:25357 [wandb_run.py:_redirect():2306] redirect: wrap_raw
+2026-09-24 15:27:11,960 INFO    MainThread:25357 [wandb_run.py:_redirect():2375] Wrapping output streams.
+2026-09-24 15:27:11,960 INFO    MainThread:25357 [wandb_run.py:_redirect():2398] Redirects installed.
+2026-09-24 15:27:11,962 INFO    MainThread:25357 [wandb_init.py:init():1075] run started, returning control to user process
+2026-09-24 15:27:18,200 INFO    MainThread:25357 [wandb_run.py:_finish():2224] finishing run bayesian_god/gplan/c5o4f98d
+2026-09-24 15:27:18,201 INFO    MainThread:25357 [wandb_run.py:_atexit_cleanup():2423] got exitcode: 0
+2026-09-24 15:27:18,201 INFO    MainThread:25357 [wandb_run.py:_restore():2405] restore
+2026-09-24 15:27:18,201 INFO    MainThread:25357 [wandb_run.py:_restore():2411] restore done
+2026-09-24 15:27:21,189 INFO    MainThread:25357 [wandb_run.py:_footer_history_summary_info():3903] rendering history
+2026-09-24 15:27:21,189 INFO    MainThread:25357 [wandb_run.py:_footer_history_summary_info():3935] rendering summary
+2026-09-24 15:27:21,190 INFO    MainThread:25357 [wandb_run.py:_footer_sync_info():3864] logging synced files

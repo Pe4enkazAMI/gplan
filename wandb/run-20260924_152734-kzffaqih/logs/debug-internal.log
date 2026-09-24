@@ -1,0 +1,13 @@
+{"time":"2026-09-24T15:27:35.173095+04:00","level":"INFO","msg":"stream: starting","core version":"0.21.0"}
+{"time":"2026-09-24T15:27:36.373936+04:00","level":"INFO","msg":"stream: created new stream","id":"kzffaqih"}
+{"time":"2026-09-24T15:27:36.374053+04:00","level":"INFO","msg":"stream: started","id":"kzffaqih"}
+{"time":"2026-09-24T15:27:36.374097+04:00","level":"INFO","msg":"sender: started","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:36.374083+04:00","level":"INFO","msg":"handler: started","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:36.374107+04:00","level":"INFO","msg":"writer: Do: started","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:50.456442+04:00","level":"INFO","msg":"handler: operation stats","stats":{"operations":[{"desc":"uploading wandb-summary.json","runtime_seconds":0.464355292,"progress":"150B/150B"}],"total_operations":1}}
+{"time":"2026-09-24T15:27:51.250837+04:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2026-09-24T15:27:52.524988+04:00","level":"INFO","msg":"stream: closing","id":"kzffaqih"}
+{"time":"2026-09-24T15:27:52.525029+04:00","level":"INFO","msg":"handler: closed","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:52.525057+04:00","level":"INFO","msg":"sender: closed","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:52.525063+04:00","level":"INFO","msg":"writer: Close: closed","stream_id":"kzffaqih"}
+{"time":"2026-09-24T15:27:52.525348+04:00","level":"INFO","msg":"stream: closed","id":"kzffaqih"}
