@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 import math
+import torch.nn.functional as F
 
 class GPlaner(nn.Module):
     """Predicts a Gaussian over the next scalar action.
@@ -33,13 +34,11 @@ class GPlaner(nn.Module):
         self.goal_proj = nn.Linear(state_dim, hidden_size)
         self.action_proj = nn.Sequential(nn.Linear(horizon, hidden_size), nn.ReLU())
 
-        layers = []
-        for _ in range(n_layers):
-            if self.mixer == "concat":
-                layers += [nn.Linear(3 * hidden_size, 3 * hidden_size), nn.ReLU()]
-            else: 
-                layers += [nn.Linear(hidden_size, hidden_size), nn.ReLU()]
-        self.backbone = nn.Sequential(*layers)
+        if self.mixer == "concat":
+            self.backbone = nn.ModuleList([nn.Linear(3 * hidden_size, 3 * hidden_size)] * n_layers)
+        else: 
+            self.backbone = nn.ModuleList([nn.Linear(hidden_size, hidden_size) * n_layers])
+        
         head_in = 3 * hidden_size if self.mixer == "concat" else hidden_size
         self.mean_head = nn.Linear(head_in, 1)
         self.log_std_head = nn.Linear(head_in, 1)  # pre-tanh log-std
@@ -77,9 +76,11 @@ class GPlaner(nn.Module):
                 + self.start_proj(start_state)
                 + self.goal_proj(goal_state)
             )
-        h = self.backbone(h)
-        mean = self.mean_head(h).squeeze(-1)
-        log_std = self.squash_log_std(self.log_std_head(h).squeeze(-1))
+        hnew = h
+        for layer in self.backbone:
+            hnew = F.relu(layer(hnew)) + h
+        mean = self.mean_head(hnew).squeeze(-1)
+        log_std = self.squash_log_std(self.log_std_head(hnew).squeeze(-1))
         return mean, torch.exp(2.0 * log_std)
 
 

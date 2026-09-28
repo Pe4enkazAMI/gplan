@@ -205,10 +205,24 @@ def grad_and_param_stats(model):
     return stats
 
 
+def linear_beta_schedule(beta_end, beta_start=0.0, warmup_steps=0):
+    """Return `step -> beta`, linear from `beta_start` to `beta_end` over `warmup_steps`, then constant.
+
+    Annealing beta up from ~0 starts training on the well-posed "match the prior"
+    problem and gradually sharpens the target exp(-beta J) N(A), so log Z and the
+    policy track a slowly moving target instead of chasing a far-away one from scratch.
+    """
+    if warmup_steps <= 0:
+        return lambda step: beta_end
+    return lambda step: beta_start + (beta_end - beta_start) * min(1.0, step / warmup_steps)
+
+
 def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_every=10, grad_clip=None, lr_z=None):
     """Run one optimization step per (start_pixels, goal_pixels) batch.
 
     Args:
+        beta:      cost temperature, either a float or a callable `step -> float`
+                   (see `linear_beta_schedule`) for annealing.
         grad_clip: max global L2 norm of the gradient; `None` or <= 0 disables clipping.
         lr_z:      learning rate for the log Z head (`model.Z`). GFlowNets are much
                    more stable when log Z can move faster than the policy, since it
@@ -226,14 +240,17 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
         {"params": z_params, "lr": lr if lr_z is None else lr_z},
     ])
     params = policy_params + z_params
+    beta_fn = beta if callable(beta) else (lambda step: beta)
     losses = []
     t_prev = time.perf_counter()
     for step, (start_pixels, goal_pixels) in enumerate(batches):
         z_start = encode(wm, start_pixels.to(device))
         z_goal = encode(wm, goal_pixels.to(device))
 
+        beta_t = beta_fn(step)
         actions = sampler.rollout(z_start, z_goal)
-        loss, stats = tb_loss(sampler, wm, z_start, z_goal, actions, beta, action_dim, return_stats=True)
+        loss, stats = tb_loss(sampler, wm, z_start, z_goal, actions, beta_t, action_dim, return_stats=True)
+        stats["tb/beta"] = beta_t
 
         opt.zero_grad()
         loss.backward()
@@ -262,7 +279,7 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
             wandb.log(stats, step=step)
         if step % log_every == 0:
             print(f"step {step:5d}  tb_loss {losses[-1]:.4f}  residual {stats['tb/residual']:+.3f}  "
-                  f"cost {stats['cost/mean']:.3f}  log_z {stats['tb/log_z']:+.3f}  "
+                  f"beta {beta_t:.3f}  cost {stats['cost/mean']:.3f}  log_z {stats['tb/log_z']:+.3f}  "
                   f"grad_norm {stats['grad_norm/global_raw']:.3e} -> {stats['grad_norm/global']:.3e}")
     return losses
 
@@ -274,7 +291,10 @@ def main():
     p.add_argument("--goal-offset", type=int, default=3, help="goal = start + this many dataset steps")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
-    p.add_argument("--beta", type=float, default=1.0)
+    p.add_argument("--beta", type=float, default=1.0, help="final cost temperature")
+    p.add_argument("--beta-start", type=float, default=0.0, help="initial beta when annealing")
+    p.add_argument("--beta-warmup", type=int, default=0,
+                   help="steps to anneal beta linearly from --beta-start to --beta (0 = constant beta)")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr-z", type=float, default=1e-1, help="learning rate of the log Z head (usually 10-100x --lr)")
     p.add_argument("--grad-clip", type=float, default=1.0, help="max global grad L2 norm; <= 0 disables")
@@ -288,13 +308,14 @@ def main():
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None, help="run name (defaults to wandb's random name)")
     p.add_argument("--mixer-type", type=str, default="concat", help="embedding mixer type (sum or concat)")
+    p.add_argument("--ref-var", type=float, default=1.0, help="variance of reference gauss")
     args = p.parse_args()
     print("Device:", args.device)
     torch.manual_seed(args.seed)
     wm = load_lewm(args.ckpt, args.device)
     embed_dim = wm.predictor.pos_embedding.shape[-1]
     model = GPlaner(state_dim=embed_dim, horizon=args.n_steps * args.action_dim, mixer=args.mixer_type).to(args.device)
-    sampler = Sampler(model)
+    sampler = Sampler(model, reference_var=args.ref_var)
 
     config = {**vars(args), "embed_dim": embed_dim, "n_params": sum(p.numel() for p in model.parameters())}
     config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}
@@ -304,7 +325,8 @@ def main():
     wandb.define_metric("cost/mean", summary="min")
 
     batches = make_batches(args.n_batches, args.batch_size, args.img_size, args.dataset, args.goal_offset, args.seed)
-    losses = train(sampler, wm, batches, args.beta, args.action_dim, args.lr, args.device,
+    beta = linear_beta_schedule(args.beta, args.beta_start, args.beta_warmup)
+    losses = train(sampler, wm, batches, beta, args.action_dim, args.lr, args.device,
                    grad_clip=args.grad_clip, lr_z=args.lr_z)
     torch.save(model.state_dict(), args.out)
     wandb.summary["final_loss"] = losses[-1]
