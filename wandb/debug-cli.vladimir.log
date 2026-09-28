@@ -1,0 +1,38 @@
+2026-09-28 13:57:00 ERROR Traceback (most recent call last):
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/cli/cli.py", line 168, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/cli/cli.py", line 385, in login
+    wandb.login(
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 105, in login
+    logged_in, _ = _login(
+                   ^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 196, in _login
+    auth: wbauth.Auth | None = _use_explicit_key(
+                               ^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 249, in _use_explicit_key
+    auth = wbauth.AuthApiKey(host=host, api_key=key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/lib/wbauth/auth.py", line 72, in __init__
+    raise AuthenticationError(problems)
+wandb.errors.errors.AuthenticationError: API key must have 40+ characters, has 36.
+Traceback (most recent call last):
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/cli/cli.py", line 168, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/cli/cli.py", line 385, in login
+    wandb.login(
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 105, in login
+    logged_in, _ = _login(
+                   ^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 196, in _login
+    auth: wbauth.Auth | None = _use_explicit_key(
+                               ^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/wandb_login.py", line 249, in _use_explicit_key
+    auth = wbauth.AuthApiKey(host=host, api_key=key)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/vladimir/ian/gplan/.venv/lib/python3.11/site-packages/wandb/sdk/lib/wbauth/auth.py", line 72, in __init__
+    raise AuthenticationError(problems)
+wandb.errors.errors.AuthenticationError: API key must have 40+ characters, has 36.
+2026-09-28 13:57:20 INFO Reached EOF.
+2026-09-28 13:57:20 INFO Closing mailbox, abandoning 0 handles.

@@ -1,0 +1,11 @@
+step     0  tb_loss 4020.4407  residual -63.091  cost 391.905  log_z -0.229  grad_norm 8.517e+02
+step    10  tb_loss 4245.8765  residual -64.932  cost 376.872  log_z +0.155  grad_norm 7.316e+02
+step    20  tb_loss 4361.1001  residual -65.903  cost 392.698  log_z +0.828  grad_norm 7.012e+02
+step    30  tb_loss 4544.4585  residual -67.191  cost 381.861  log_z +1.200  grad_norm 7.942e+02
+step    40  tb_loss 5097.3594  residual -71.183  cost 390.773  log_z +1.307  grad_norm 8.423e+02
+step    50  tb_loss 5397.4873  residual -73.130  cost 387.406  log_z +1.941  grad_norm 9.608e+02
+step    60  tb_loss 5778.7939  residual -75.662  cost 395.168  log_z +2.522  grad_norm 1.071e+03
+step    70  tb_loss 6031.1284  residual -77.362  cost 396.328  log_z +2.637  grad_norm 9.644e+02
+step    80  tb_loss 6915.2998  residual -82.811  cost 354.382  log_z +3.478  grad_norm 1.166e+03
+step    90  tb_loss 6932.6152  residual -82.857  cost 359.257  log_z +3.451  grad_norm 1.281e+03
+step   100  tb_loss 7227.6660  residual -84.408  cost 352.914  log_z +3.998  grad_norm 1.224e+03

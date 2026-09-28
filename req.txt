@@ -1,0 +1,26 @@
+# Minimal requirements for gplaner/ (tested in the DLA conda env, Python 3.11).
+# Versions are the ones the code was verified with; newer minor versions should work.
+
+# core: GPlaner model, sampler, TB training (gflow.py, train.py) + le-wm/{jepa,module}.py
+torch==2.14.0
+torchvision==0.29.0
+numpy==2.4.6
+einops==0.7.0
+
+# dataset: LeWM .h5 files use a compression filter that hdf5plugin registers
+h5py==3.16.0
+hdf5plugin==7.1.0
+
+# convert_lewm.py: download LeWM weights and rebuild the ViT-tiny encoder
+huggingface_hub==0.36.2
+transformers==4.37.2
+
+# eval.py: TwoRoom env, evaluation protocol, CEM baseline, metric logging
+stable-worldmodel==0.0.6
+gymnasium>=1.0          # stable-worldmodel needs >=1.0 (0.29.x fails to import)
+wandb==0.21.0
+imageio                 # only for eval.py --video-dir
+
+# tests
+pytest==7.4.3
+
