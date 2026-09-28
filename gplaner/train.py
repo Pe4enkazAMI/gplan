@@ -110,12 +110,14 @@ def tb_terms(sampler, wm, z_start, z_goal, actions, beta, action_dim):
         log_pf: per-slot log P_F summed over the trajectory, (B,). Per-slot
                 values are also returned as `log_pf_slots`, (B, horizon).
         cost:   J(A, c), the frozen LeWM planning cost (no gradient).
+        log_reference:   log N(0, s^2 * I), reference measure w.r.t to action trajectories
     """
     B = actions.shape[0]
     log_pf_slots = sampler.log_prob(z_start, z_goal, actions)     # (B, horizon)
     log_z = sampler.model.log_Z(z_start, z_goal)                  # (B,)
     cost = lewm_cost(wm, z_start, z_goal, actions.view(B, -1, action_dim))  # (B,)
-    return log_z, log_pf_slots.sum(-1), cost, log_pf_slots
+    log_reference = sampler.reference_log_prob(actions) # (B,) 
+    return log_z, log_pf_slots.sum(-1), cost, log_pf_slots, log_reference
 
 
 def tb_loss(sampler, wm, z_start, z_goal, actions, beta, action_dim, return_stats=False):
@@ -127,13 +129,19 @@ def tb_loss(sampler, wm, z_start, z_goal, actions, beta, action_dim, return_stat
         action_dim:   dimension of a single world-model action.
         return_stats: also return a dict of detached scalar diagnostics.
     """
-    log_z, log_pf, cost, log_pf_slots = tb_terms(sampler, wm, z_start, z_goal, actions, beta, action_dim)
-    residual = log_z + log_pf + beta * cost
+    log_z, log_pf, cost, log_pf_slots, log_reference = tb_terms(sampler, wm, z_start, z_goal, actions, beta, action_dim)
+    # log Z + log P_F(A) = log R(A),  with  R(A) = exp(-beta J(A)) * N(A; 0, s^2 I)
+    # i.e. the reference is a Gaussian prior on action buffers. With a "+" sign the
+    # target would be exp(-beta J) / N(A), which is unnormalizable (grows as exp(|A|^2/2))
+    # and drives the policy std to its cap -- e.g. beta=0 can never converge.
+    residual = log_z + log_pf + beta * cost - log_reference
     loss = residual.pow(2).mean()
     if not return_stats:
         return loss
     with torch.no_grad():
         stats = {
+            "tb/refrence_mean": log_reference.mean(),
+            "tb/refrence_std": log_reference.std(),
             "tb/log_z": log_z.mean(),
             "tb/log_z_std": log_z.std(),
             "tb/log_pf": log_pf.mean(),
@@ -146,7 +154,8 @@ def tb_loss(sampler, wm, z_start, z_goal, actions, beta, action_dim, return_stat
             "cost/std": cost.std(),
             "cost/min": cost.min(),
             "cost/max": cost.max(),
-            "cost/beta_cost": (beta * cost).mean(),  # -log R, the target log_z + log_pf must match
+            "cost/beta_cost": (beta * cost).mean(),
+            "tb/neg_log_reward": (beta * cost - log_reference).mean(),  # -log R, the target log_z + log_pf must match
             "actions/mean": actions.mean(),
             "actions/std": actions.std(),
             "actions/abs_max": actions.abs().max(),
@@ -196,13 +205,27 @@ def grad_and_param_stats(model):
     return stats
 
 
-def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_every=10):
+def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_every=10, grad_clip=None, lr_z=None):
     """Run one optimization step per (start_pixels, goal_pixels) batch.
+
+    Args:
+        grad_clip: max global L2 norm of the gradient; `None` or <= 0 disables clipping.
+        lr_z:      learning rate for the log Z head (`model.Z`). GFlowNets are much
+                   more stable when log Z can move faster than the policy, since it
+                   alone must absorb the constant offset of the TB residual.
+                   Defaults to `lr`.
 
     Every step is logged to wandb when a run is active (`wandb.init` was called);
     otherwise only the console summary every `log_every` steps is printed.
     """
-    opt = torch.optim.Adam(sampler.model.parameters(), lr=lr)
+    z_params = list(sampler.model.Z.parameters())
+    z_ids = {id(p) for p in z_params}
+    policy_params = [p for p in sampler.model.parameters() if id(p) not in z_ids]
+    opt = torch.optim.Adam([
+        {"params": policy_params, "lr": lr},
+        {"params": z_params, "lr": lr if lr_z is None else lr_z},
+    ])
+    params = policy_params + z_params
     losses = []
     t_prev = time.perf_counter()
     for step, (start_pixels, goal_pixels) in enumerate(batches):
@@ -214,7 +237,14 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
 
         opt.zero_grad()
         loss.backward()
-        stats.update(grad_and_param_stats(sampler.model))
+        stats.update(grad_and_param_stats(sampler.model))  # raw (pre-clip) norms
+        stats["grad_norm/global_raw"] = stats.pop("grad_norm/global")
+        if grad_clip is not None and grad_clip > 0:
+            pre = torch.nn.utils.clip_grad_norm_(params, grad_clip).item()
+            stats["grad_norm/clipped"] = float(pre > grad_clip)         # fraction of clipped steps when averaged
+            stats["grad_norm/clip_scale"] = min(1.0, grad_clip / (pre + 1e-12))  # 1 = untouched
+        # norm of the gradient the optimizer actually applies (== raw when not clipped)
+        stats["grad_norm/global"] = torch.cat([p.grad.flatten() for p in params if p.grad is not None]).norm().item()
         opt.step()
 
         losses.append(loss.item())
@@ -222,6 +252,7 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
         stats.update({
             "loss/tb": losses[-1],
             "optim/lr": opt.param_groups[0]["lr"],
+            "optim/lr_z": opt.param_groups[1]["lr"],
             "time/step_s": t_now - t_prev,
             "time/samples_per_s": actions.shape[0] / (t_now - t_prev),
         })
@@ -232,7 +263,7 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
         if step % log_every == 0:
             print(f"step {step:5d}  tb_loss {losses[-1]:.4f}  residual {stats['tb/residual']:+.3f}  "
                   f"cost {stats['cost/mean']:.3f}  log_z {stats['tb/log_z']:+.3f}  "
-                  f"grad_norm {stats['grad_norm/global']:.3e}")
+                  f"grad_norm {stats['grad_norm/global_raw']:.3e} -> {stats['grad_norm/global']:.3e}")
     return losses
 
 
@@ -240,11 +271,13 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
     p.add_argument("--dataset", default="tworoom", help=".h5 name under $STABLEWM_HOME")
-    p.add_argument("--goal-offset", type=int, default=25, help="goal = start + this many dataset steps")
+    p.add_argument("--goal-offset", type=int, default=3, help="goal = start + this many dataset steps")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
     p.add_argument("--beta", type=float, default=1.0)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--lr-z", type=float, default=1e-1, help="learning rate of the log Z head (usually 10-100x --lr)")
+    p.add_argument("--grad-clip", type=float, default=1.0, help="max global grad L2 norm; <= 0 disables")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--n-batches", type=int, default=1000)
     p.add_argument("--img-size", type=int, default=224)
@@ -254,12 +287,13 @@ def main():
     p.add_argument("--wandb-project", default="gplan")
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None, help="run name (defaults to wandb's random name)")
+    p.add_argument("--mixer-type", type=str, default="concat", help="embedding mixer type (sum or concat)")
     args = p.parse_args()
     print("Device:", args.device)
     torch.manual_seed(args.seed)
     wm = load_lewm(args.ckpt, args.device)
     embed_dim = wm.predictor.pos_embedding.shape[-1]
-    model = GPlaner(state_dim=embed_dim, horizon=args.n_steps * args.action_dim).to(args.device)
+    model = GPlaner(state_dim=embed_dim, horizon=args.n_steps * args.action_dim, mixer=args.mixer_type).to(args.device)
     sampler = Sampler(model)
 
     config = {**vars(args), "embed_dim": embed_dim, "n_params": sum(p.numel() for p in model.parameters())}
@@ -270,7 +304,8 @@ def main():
     wandb.define_metric("cost/mean", summary="min")
 
     batches = make_batches(args.n_batches, args.batch_size, args.img_size, args.dataset, args.goal_offset, args.seed)
-    losses = train(sampler, wm, batches, args.beta, args.action_dim, args.lr, args.device)
+    losses = train(sampler, wm, batches, args.beta, args.action_dim, args.lr, args.device,
+                   grad_clip=args.grad_clip, lr_z=args.lr_z)
     torch.save(model.state_dict(), args.out)
     wandb.summary["final_loss"] = losses[-1]
     wandb.save(str(args.out), policy="now")
