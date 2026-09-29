@@ -49,8 +49,7 @@ def planner_kwargs_from_state_dict(sd):
     horizon = sd["action_proj.0.weight"].shape[1]
     action_dim, head_in = sd["mean_head.weight"].shape
     n_layers = len({k.split(".")[1] for k in sd if k.startswith("backbone.")})
-    return dict(state_dim=state_dim, horizon=horizon, hidden_size=hidden, n_layers=n_layers,
-                mixer="concat" if head_in == 3 * hidden else "sum", action_dim=action_dim)
+    return dict(state_dim=state_dim, horizon=horizon, hidden_size=hidden, n_layers=n_layers, action_dim=action_dim)
 
 
 def load_planner(path, device):

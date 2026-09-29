@@ -25,8 +25,8 @@ class GPlaner(nn.Module):
     collapse to zero nor blow up (as in SAC-style policies).
     """
 
-    def __init__(self, state_dim=2, horizon=8, hidden_size=64, n_layers=2, mixer="concat",
-                 log_std_min=-5.0, log_std_max=2.0, action_dim=1) -> None:
+    def __init__(self, state_dim=2, horizon=8, hidden_size=64, n_layers=2, 
+                log_std_min=-5.0, log_std_max=2.0, action_dim=1) -> None:
         super().__init__()
         assert horizon % action_dim == 0, f"horizon {horizon} must be a multiple of action_dim {action_dim}"
         self.horizon = horizon
@@ -36,19 +36,20 @@ class GPlaner(nn.Module):
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
-        self.start_proj = nn.Linear(state_dim, hidden_size)
-        self.goal_proj = nn.Linear(state_dim, hidden_size)
-        self.action_proj = nn.Sequential(nn.Linear(horizon, hidden_size), nn.ReLU())
+        # self.start_proj = nn.Linear(state_dim, hidden_size)
+        # self.goal_proj = nn.Linear(state_dim, hidden_size)
+        # self.action_proj = nn.Sequential(nn.Linear(horizon, hidden_size), nn.ReLU())
 
-        if self.mixer == "concat":
-            self.backbone = nn.ModuleList([nn.Linear(3 * hidden_size, 3 * hidden_size) for _ in range(n_layers)])
-        else: 
-            self.backbone = nn.ModuleList([nn.Linear(hidden_size, hidden_size) for _ in range(n_layers)])
+        self.in_proj = nn.Sequential(nn.Linear(2 * state_dim + horizon, 3 * hidden_size), nn.GELU())
+
+        self.backbone = nn.ModuleList([nn.Linear(3 * hidden_size, 3 * hidden_size) for _ in range(n_layers)])
+
+        self.out_proj = nn.Linear(3 * hidden_size, 2 * action_dim)
         
-        head_in = 3 * hidden_size if self.mixer == "concat" else hidden_size
-        self.mean_head = nn.Linear(head_in, action_dim)
-        self.log_std_head = nn.Linear(head_in, action_dim)  # pre-tanh log-std
-        self.Z = nn.Sequential(*[nn.Linear(state_dim, state_dim), nn.ReLU(), nn.Linear(state_dim, 1)])# log-partition function log Z(start, goal)
+        # head_in = 3 * hidden_size if self.mixer == "concat" else hidden_size
+        # self.mean_head = nn.Linear(head_in, action_dim)
+        # self.log_std_head = nn.Linear(head_in, action_dim)  # pre-tanh log-std
+        self.Z = nn.Sequential(*[nn.Linear(2 * state_dim, state_dim), nn.ReLU(), nn.Linear(state_dim, 64)]) # log-partition function log Z(start, goal)
 
     def squash_log_std(self, x):
         """Map an unbounded head output to log_std in [log_std_min, log_std_max] via tanh."""
@@ -56,8 +57,8 @@ class GPlaner(nn.Module):
 
     def log_Z(self, start_state, goal_state):
         """Log-partition function of the GFlowNet, conditioned on (start, goal). Shape (B,)."""
-
-        return self.Z(start_state + goal_state).squeeze(-1)
+        z_stacked = torch.cat([start_state, goal_state], dim=-1)
+        return self.Z(z_stacked).sum(-1).squeeze(-1)
 
     def forward(self, start_state, goal_state, actions):
         """
@@ -71,22 +72,15 @@ class GPlaner(nn.Module):
                        var = exp(2 * log_std) with log_std tanh-bounded, so it is
                        always strictly positive and finite.
         """
-        if self.mixer == "concat":
-            z_act = self.action_proj(actions)
-            z_goal = self.goal_proj(goal_state)
-            z_start = self.start_proj(start_state)
-            h = torch.cat([z_act, z_goal, z_start], dim=-1)
-        else:
-            h = (
-                self.action_proj(actions)
-                + self.start_proj(start_state)
-                + self.goal_proj(goal_state)
-            )
-        hnew = h
+        z_stacked = torch.cat([start_state, goal_state, actions], dim=-1)
+        h_stacked = self.in_proj(z_stacked)
+        hnew = h_stacked
         for layer in self.backbone:
-            hnew = F.relu(layer(hnew)) + h
-        mean = self.mean_head(hnew)
-        log_std = self.squash_log_std(self.log_std_head(hnew))
+            hnew = F.gelu(layer(hnew)) + h_stacked
+
+        out = self.out_proj(hnew)
+        mean, raw_std = out.chunk(2, -1)
+        log_std = self.squash_log_std(raw_std.squeeze(-1))
         return mean, torch.exp(2.0 * log_std)
 
 
