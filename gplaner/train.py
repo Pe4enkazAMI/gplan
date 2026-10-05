@@ -356,7 +356,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
     p.add_argument("--dataset", default="tworoom", help=".h5 name under $STABLEWM_HOME")
-    p.add_argument("--goal-offset", type=int, default=3, help="goal = start + this many dataset steps")
+    p.add_argument("--goal-offset", type=int, default=25, help="goal = start + this many dataset steps")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
     p.add_argument("--loss", default="tb", choices=["vargrad", "tb"])
@@ -393,9 +393,8 @@ def main():
                job_type="train")
     wandb.define_metric("loss/total", summary="min")
     wandb.define_metric("cost/mean", summary="min")
-
     batches = make_batches(args.n_batches, args.batch_size, args.img_size, args.dataset, args.goal_offset, args.seed)
-    beta = linear_beta_schedule(args.beta, args.beta_start, args.beta_warmup)
+    beta = linear_beta_schedule(args.beta / 192, args.beta_start, args.beta_warmup)
     losses = train(sampler, wm, batches, beta, args.action_dim, args.lr, args.device,
                    grad_clip=args.grad_clip, lr_z=args.lr_z, loss_type=args.loss, n_samples=args.n_samples)
     # self-describing checkpoint so eval.py can rebuild the exact architecture (eval also accepts a bare state_dict)

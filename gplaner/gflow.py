@@ -32,7 +32,6 @@ class GPlaner(nn.Module):
         self.horizon = horizon
         self.action_dim = action_dim
         self.n_steps = horizon // action_dim
-        self.mixer = mixer
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 

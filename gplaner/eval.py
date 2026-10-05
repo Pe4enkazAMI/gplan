@@ -290,7 +290,7 @@ def main():
     p.add_argument("--dataset", default="tworoom")
     p.add_argument("--env", default="swm/TwoRoom-v1")
     p.add_argument("--num-eval", type=int, default=50)
-    p.add_argument("--goal-offset", type=int, default=3)
+    p.add_argument("--goal-offset", type=int, default=10)
     p.add_argument("--eval-budget", type=int, default=50)
     p.add_argument("--horizon", type=int, default=5)
     p.add_argument("--action-block", type=int, default=5, help="frameskip")
