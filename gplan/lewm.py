@@ -5,16 +5,16 @@ needs the le-wm source importable under its own top-level module names (`jepa`,
 `module`). Importing this module puts the `le-wm` git submodule on `sys.path`.
 """
 
-import os
 import sys
 from pathlib import Path
 
 import torch
 from torchvision.transforms import v2 as transforms
 
+from gplan.data import STABLEWM_HOME  # noqa: F401  (re-exported for scripts)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LEWM_DIR = REPO_ROOT / "le-wm"
-STABLEWM_HOME = Path(os.getenv("STABLEWM_HOME", "~/.stable_worldmodel")).expanduser()
 IMAGENET = dict(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
 if not (LEWM_DIR / "jepa.py").exists():
