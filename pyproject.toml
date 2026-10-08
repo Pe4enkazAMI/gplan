@@ -30,9 +30,13 @@ convert = [
     "transformers==4.37.2",
 ]
 test = ["pytest==7.4.3"]
+# JAX training. `jax` = CPU (any OS, enough for the tests); `jax-cuda` = NVIDIA GPU with CUDA 13
+# (Linux x86_64 / aarch64, driver >= 580), e.g. DGX Spark / GB10.
+jax = ["jax==0.11.2", "equinox==0.13.8", "optax==0.2.8"]
+jax-cuda = ["jax[cuda13]==0.11.2", "equinox==0.13.8", "optax==0.2.8"]
 
 [tool.setuptools]
-packages = ["gplan"]
+packages = ["gplan", "gplan_jax"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
