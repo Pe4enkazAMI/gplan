@@ -394,7 +394,8 @@ def main():
     wandb.define_metric("loss/total", summary="min")
     wandb.define_metric("cost/mean", summary="min")
     batches = make_batches(args.n_batches, args.batch_size, args.img_size, args.dataset, args.goal_offset, args.seed)
-    beta = linear_beta_schedule(args.beta / 192, args.beta_start, args.beta_warmup)
+    # --beta and --beta-start are given per embedding dimension; J sums over all embed_dim dims
+    beta = linear_beta_schedule(args.beta / embed_dim, args.beta_start / embed_dim, args.beta_warmup)
     losses = train(sampler, wm, batches, beta, args.action_dim, args.lr, args.device,
                    grad_clip=args.grad_clip, lr_z=args.lr_z, loss_type=args.loss, n_samples=args.n_samples)
     # self-describing checkpoint so eval.py can rebuild the exact architecture (eval also accepts a bare state_dict)

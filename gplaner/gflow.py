@@ -57,7 +57,7 @@ class GPlaner(nn.Module):
     def log_Z(self, start_state, goal_state):
         """Log-partition function of the GFlowNet, conditioned on (start, goal). Shape (B,)."""
         z_stacked = torch.cat([start_state, goal_state], dim=-1)
-        return self.Z(z_stacked).sum(-1).squeeze(-1)
+        return self.Z(z_stacked).sum(-1)
 
     def forward(self, start_state, goal_state, actions):
         """
@@ -79,7 +79,7 @@ class GPlaner(nn.Module):
 
         out = self.out_proj(hnew)
         mean, raw_std = out.chunk(2, -1)
-        log_std = self.squash_log_std(raw_std.squeeze(-1))
+        log_std = self.squash_log_std(raw_std)
         return mean, torch.exp(2.0 * log_std)
 
 

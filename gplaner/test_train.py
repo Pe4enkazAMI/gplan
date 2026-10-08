@@ -16,6 +16,7 @@ from jepa import JEPA
 from module import MLP, ARPredictor, Embedder
 
 B, T, A, D, HS, IMG = 4, 3, 2, 16, 3, 8  # batch, horizon, action dim, embed dim, history, image size
+N_ANALYTIC_STEPS = 600
 
 
 class DummyEncoder(nn.Module):
@@ -86,11 +87,12 @@ def test_tb_loss_value_and_grads(wm, sampler, batch):
     loss = train.tb_loss(sampler, wm, z_start, z_goal, actions, beta=0.5, action_dim=A)
     assert loss.ndim == 0 and torch.isfinite(loss)
 
-    # matches the formula ( log Z + sum_t log P_F + beta * J )^2 averaged over the batch
+    # matches the formula ( log Z + sum_t log P_F + beta * J - log N(A) )^2 averaged over the batch
     log_pf = sampler.log_prob(z_start, z_goal, actions).sum(-1)
     log_z = sampler.model.log_Z(z_start, z_goal)
     cost = train.lewm_cost(wm, z_start, z_goal, actions.view(B, T, A))
-    assert torch.allclose(loss, (log_z + log_pf + 0.5 * cost).pow(2).mean())
+    log_ref = sampler.reference_log_prob(actions)
+    assert torch.allclose(loss, (log_z + log_pf + 0.5 * cost - log_ref).pow(2).mean())
 
     loss.backward()
     for name, p in sampler.model.named_parameters():
@@ -113,17 +115,18 @@ def test_train_runs_end_to_end(wm, sampler, batch):
 
 
 def test_train_converges_to_analytic_solution(wm, sampler, monkeypatch):
-    """With J(A) = ||A||^2 the TB-optimal policy is known in closed form:
-    each action ~ N(0, 1 / (2 beta)) and log Z = (H / 2) * log(pi / beta).
-    (The random dummy WM cannot be used here: its cost is ~constant in the actions,
-    so the target exp(-beta J) is an improper uniform over R^H.)"""
+    """With J(A) = ||A||^2 and the N(0, s^2 I) reference, the target is a product of Gaussians:
+    each action ~ N(0, 1 / (2 beta + 1 / s^2)) and log Z = -(H / 2) * log(1 + 2 beta s^2).
+    (The random dummy WM cannot be used here: its cost is ~constant in the actions.)"""
     beta, H, n = 2.0, T * A, 64
+    s2 = sampler.reference_var
     monkeypatch.setattr(train, "lewm_cost", lambda wm, zs, zg, a: a.flatten(1).pow(2).sum(-1))
 
     torch.manual_seed(0)
     batch = (torch.randn(n, 3, IMG, IMG), torch.randn(n, 3, IMG, IMG))
-    losses = train.train(sampler, wm, [batch] * 300, beta=beta, action_dim=A, lr=1e-2, log_every=1000)
-    assert losses[-1] < 0.05 < losses[0]
+    losses = train.train(sampler, wm, [batch] * N_ANALYTIC_STEPS, beta=beta, action_dim=1, lr=1e-3, lr_z=1e-2,
+                         grad_clip=10.0, log_every=10**9)
+    assert sum(losses[-20:]) / 20 < 0.05 < losses[0]
 
     z_start, z_goal = train.encode(wm, batch[0]), train.encode(wm, batch[1])
     with torch.no_grad():
@@ -131,8 +134,24 @@ def test_train_converges_to_analytic_solution(wm, sampler, monkeypatch):
         for t in range(H):
             dist = sampler.action_dist(z_start, z_goal, actions, t)
             assert dist.mean.abs().max() < 0.1
-            assert torch.allclose(dist.variance, torch.full_like(dist.variance, 1 / (2 * beta)), atol=0.03)
+            assert torch.allclose(dist.variance, torch.full_like(dist.variance, 1 / (2 * beta + 1 / s2)), atol=0.03)
         log_z = sampler.model.log_Z(z_start, z_goal)
-        target_log_z = H / 2 * math.log(math.pi / beta)
+        target_log_z = -H / 2 * math.log(1 + 2 * beta * s2)
         assert abs(log_z.mean().item() - target_log_z) < 0.05
         assert (log_z - target_log_z).abs().max() < 0.3
+
+
+@pytest.mark.parametrize("action_dim", [1, A])
+def test_rollout_and_log_prob_shapes(action_dim):
+    """Both the scalar (action_dim=1) and the blocked layout produce a full buffer and per-step log-probs."""
+    torch.manual_seed(0)
+    s = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=action_dim))
+    z_start, z_goal = torch.randn(B, D), torch.randn(B, D)
+    actions = s.rollout(z_start, z_goal)
+    assert actions.shape == (B, T * A)
+    assert s.log_prob(z_start, z_goal, actions).shape == (B, T * A // action_dim)
+
+
+def test_log_z_keeps_batch_dim_for_single_condition():
+    model = GPlaner(state_dim=D, horizon=T * A, action_dim=A)
+    assert model.log_Z(torch.randn(1, D), torch.randn(1, D)).shape == (1,)

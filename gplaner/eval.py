@@ -10,7 +10,7 @@ seeds, so success rates are directly comparable.
     # head-to-head, one wandb run with a comparison table
     python gplaner/eval.py --policy gflow cem --planner gplaner/gplaner.pt
 
-    # just the GFlowNet, no cost re-ranking (1 sample per replanning, no LeWM cost evaluated at all)
+    # just the GFlowNet, no cost re-ranking (1 sample per replanning; the cost is computed for logging only)
     python gplaner/eval.py --policy gflow --planner gplaner/gplaner.pt --gflow-select sample
 
     python gplaner/eval.py --policy cem        # LeWM paper planner
@@ -42,14 +42,14 @@ import stable_worldmodel as swm  # noqa: E402
 # ----------------------------------------------------------------------------- planner checkpoint
 
 def planner_kwargs_from_state_dict(sd):
-    """Recover `GPlaner(...)` constructor kwargs from a bare state_dict (checkpoints saved before
-    train.py stored `model_kwargs`). Bounds of the log-std squash are not in the state_dict and
-    are assumed to be the defaults."""
-    hidden, state_dim = sd["start_proj.weight"].shape
-    horizon = sd["action_proj.0.weight"].shape[1]
-    action_dim, head_in = sd["mean_head.weight"].shape
+    """Recover `GPlaner(...)` constructor kwargs from a bare state_dict of the current architecture.
+    Bounds of the log-std squash are not in the state_dict and are assumed to be the defaults."""
+    width, in_dim = sd["in_proj.0.weight"].shape            # (3 * hidden, 2 * state_dim + horizon)
+    state_dim = sd["Z.0.weight"].shape[1] // 2               # Z: Linear(2 * state_dim, state_dim)
+    action_dim = sd["out_proj.weight"].shape[0] // 2         # (2 * action_dim, 3 * hidden)
     n_layers = len({k.split(".")[1] for k in sd if k.startswith("backbone.")})
-    return dict(state_dim=state_dim, horizon=horizon, hidden_size=hidden, n_layers=n_layers, action_dim=action_dim)
+    return dict(state_dim=state_dim, horizon=in_dim - 2 * state_dim, hidden_size=width // 3,
+                n_layers=n_layers, action_dim=action_dim)
 
 
 def load_planner(path, device):
@@ -290,7 +290,7 @@ def main():
     p.add_argument("--dataset", default="tworoom")
     p.add_argument("--env", default="swm/TwoRoom-v1")
     p.add_argument("--num-eval", type=int, default=50)
-    p.add_argument("--goal-offset", type=int, default=10)
+    p.add_argument("--goal-offset", type=int, default=25)
     p.add_argument("--eval-budget", type=int, default=50)
     p.add_argument("--horizon", type=int, default=5)
     p.add_argument("--action-block", type=int, default=5, help="frameskip")
