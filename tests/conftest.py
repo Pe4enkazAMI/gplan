@@ -13,6 +13,16 @@ from module import MLP, ARPredictor, Embedder
 
 B, T, A, D, HS, IMG = 4, 3, 2, 16, 3, 8  # batch, horizon, action dim, embed dim, history, image size
 
+try:
+    import jax
+except ImportError:  # torch-only test runs
+    pass
+else:
+    # The parity tests compare JAX against float32 PyTorch on CPU. On an NVIDIA GPU, JAX's default
+    # float32 matmul runs in TF32 (~3 significant digits), which alone produces 1e-4..1e-2 relative
+    # differences. The tests check the math, so they run at full float32 precision, like scripts/train.py.
+    jax.config.update("jax_default_matmul_precision", "highest")
+
 
 class DummyEncoder(nn.Module):
     """Mimics the HF ViT interface used by JEPA.encode: returns .last_hidden_state (B, N, D)."""
