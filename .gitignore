@@ -1,2 +1,20 @@
-wandb/*
-.pt
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Experiment outputs
+wandb/
+*.pt
+*.ckpt
+outputs/
+
+# Upstream clone not used by gplan (LeWM training only)
+stable-pretraining/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
