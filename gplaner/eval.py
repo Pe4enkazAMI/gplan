@@ -260,16 +260,23 @@ def evaluate(name, policy, args, dataset, episodes, start_steps):
     )
     world.set_policy(policy)
     t0 = time.time()
+    if args.dataset =='pusht':
+        callables = [
+            {"method": "_set_state", "args": {"state": {"value": "state"}}},
+            {"method": "_set_goal_state", "args": {"goal_state": {"value": "goal_state"}}},
+        ]
+    else: 
+        callables = [
+            {"method": "_set_state", "args": {"state": {"value": "proprio"}}},
+            {"method": "_set_goal_state", "args": {"goal_state": {"value": "goal_proprio"}}},
+        ]
     results = world.evaluate_from_dataset(
         dataset=dataset,
         episodes_idx=episodes,
         start_steps=start_steps,
         goal_offset_steps=args.goal_offset,
         eval_budget=args.eval_budget,
-        callables=[
-            {"method": "_set_state", "args": {"state": {"value": "proprio"}}},
-            {"method": "_set_goal_state", "args": {"goal_state": {"value": "goal_proprio"}}},
-        ],
+        callables=callables,
         save_video=args.video_dir is not None,
         video_path=str(Path(args.video_dir) / name) if args.video_dir else "./",
     )
@@ -290,7 +297,7 @@ def main():
     p.add_argument("--dataset", default="tworoom")
     p.add_argument("--env", default="swm/TwoRoom-v1")
     p.add_argument("--num-eval", type=int, default=50)
-    p.add_argument("--goal-offset", type=int, default=10)
+    p.add_argument("--goal-offset", type=int, default=25)
     p.add_argument("--eval-budget", type=int, default=50)
     p.add_argument("--horizon", type=int, default=5)
     p.add_argument("--action-block", type=int, default=5, help="frameskip")
@@ -312,7 +319,7 @@ def main():
                job_type="eval")
 
     # -- data: start/goal pairs (shared by every policy) and normalization stats
-    dataset = swm.data.HDF5Dataset(args.dataset, keys_to_cache=["action", "proprio"])
+    dataset = swm.data.HDF5Dataset(args.dataset, keys_to_cache=["action", "proprio", "state"])
     process = fit_normalizers(dataset, ["action", "proprio"])
     episodes, start_steps = sample_eval_starts(dataset, args.num_eval, args.goal_offset, args.seed)
 

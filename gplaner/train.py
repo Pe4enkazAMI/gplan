@@ -354,8 +354,8 @@ def train(sampler, wm, batches, beta, action_dim, lr=1e-3, device="cpu", log_eve
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--ckpt", default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
-    p.add_argument("--dataset", default="tworoom", help=".h5 name under $STABLEWM_HOME")
+    p.add_argument("--ckpt", default=STABLEWM_HOME / "pusht/lewm_object.ckpt", help="LeWM *_object.ckpt")
+    p.add_argument("--dataset", default="pusht", help=".h5 name under $STABLEWM_HOME")
     p.add_argument("--goal-offset", type=int, default=25, help="goal = start + this many dataset steps")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
