@@ -1,7 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "gplan"
 version = "0.1.0"
-description = "Add your description here"
+description = "GFlowNet samplers as amortized planners for LeWorldModel"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+# Versions are the ones the code was verified with (DLA conda env, Python 3.11).
+dependencies = [
+    "torch==2.14.0",
+    "torchvision==0.29.0",
+    "numpy==2.4.6",
+    "einops==0.7.0",
+    "h5py==3.16.0",
+    "hdf5plugin==7.1.0",   # registers the compression filter used by the LeWM .h5 files
+    "wandb==0.21.0",
+]
+
+[project.optional-dependencies]
+eval = [
+    "stable-worldmodel==0.0.6",
+    "gymnasium>=1.0",       # stable-worldmodel needs >=1.0 (0.29.x fails to import)
+    "imageio",              # only for --video-dir
+]
+convert = [
+    "huggingface_hub==0.36.2",
+    "transformers==4.37.2",
+]
+test = ["pytest==7.4.3"]
+
+[tool.setuptools]
+packages = ["gplan"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

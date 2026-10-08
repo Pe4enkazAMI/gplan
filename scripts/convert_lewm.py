@@ -2,7 +2,7 @@
 `<name>_object.ckpt` (a pickled `jepa.JEPA`) that `stable_worldmodel` and our
 train / eval scripts load.
 
-    python gplaner/convert_lewm.py --repo quentinll/lewm-tworooms --name tworoom/lewm
+    python scripts/convert_lewm.py --repo quentinll/lewm-tworooms --name tworoom/lewm
     -> $STABLEWM_HOME/tworoom/lewm_object.ckpt   (usable as swm.policy.AutoCostModel("tworoom/lewm"))
 
 Follows the recipe in le-wm/README.md, except that the ViT is built directly with
@@ -12,15 +12,13 @@ script does not depend on `stable_pretraining` being importable.
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
 from transformers import ViTConfig, ViTModel
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train import STABLEWM_HOME  # noqa: E402  (puts le-wm on sys.path)
+from gplan.lewm import STABLEWM_HOME  # also puts the le-wm submodule on sys.path
 from jepa import JEPA  # noqa: E402
 from module import MLP, ARPredictor, Embedder  # noqa: E402
 
