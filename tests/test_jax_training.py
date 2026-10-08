@@ -103,7 +103,14 @@ def test_train_converges_to_analytic_solution(loss_type):
     plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(keys, zs, zg)
     _, means, stds = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
     assert float(jnp.abs(means).max()) < 0.1
-    np.testing.assert_allclose(np.asarray(stds) ** 2, 1 / (2 * beta + 1 / s2), atol=0.03)
+    # The optimum is a statement about the distribution, so check the variance averaged over all
+    # conditions tightly (dropping the prior would give 0.25, i.e. 0.05 off) and each condition loosely:
+    # after a finite stochastic run one of a few conditions can still lag (seen: 0.23 on one of 8), and
+    # float round-off differences between CPUs change which one.
+    target_var = 1 / (2 * beta + 1 / s2)
+    variances = np.asarray(stds) ** 2
+    assert abs(variances.mean() - target_var) < 0.01
+    np.testing.assert_allclose(variances, target_var, atol=0.05)
     log_z = jax.vmap(model.log_Z)(zs, zg)
     target = -H / 2 * math.log(1 + 2 * beta * s2)
     assert abs(float(log_z.mean()) - target) < 0.1  # target -4.83; a wrong prior term would give +1.35
