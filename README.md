@@ -50,8 +50,15 @@ python scripts/encode_dataset.py --dataset tworoom
 #    Writes outputs/tb-beta120.eqx (JAX weights), .json (config) and .pt (PyTorch copy for eval)
 python scripts/train.py --beta 120 --wandb-name tb-beta120 --out outputs/tb-beta120
 
-# 4. Evaluate against CEM on the same 50 TwoRoom episodes (PyTorch)
+# 4. Evaluate against CEM on the same 50 TwoRoom episodes (PyTorch); episodes are drawn
+#    exactly as le-wm/eval.py draws them, so CEM numbers are comparable to the LeWM paper
 python scripts/evaluate.py --policy gflow cem --planner outputs/tb-beta120.pt
+
+# PushT: same steps with its own checkpoint and dataset
+python scripts/convert_lewm.py --repo quentinll/lewm-pusht --name pusht/lewm
+python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt
+python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 90 --out outputs/pusht
+python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 
 # re-export a JAX checkpoint to PyTorch, if needed
 python scripts/export_planner.py outputs/tb-beta120
@@ -78,7 +85,7 @@ training step includes JIT compilation (~10 s).
 | `gplan/lewm.py` | PyTorch LeWM: load, `encode`, `lewm_cost` (reference implementation) |
 | `gplan/precompute.py` | Encode a dataset's frames into latents |
 | `gplan/policy.py` | PyTorch `GPlaner` + `Sampler`, used by evaluation |
-| `gplan/solvers.py`, `gplan/evaluation.py` | `stable_worldmodel` solvers and the LeWM TwoRoom protocol |
+| `gplan/solvers.py`, `gplan/evaluation.py` | `stable_worldmodel` solvers and the LeWM evaluation protocol; `TASKS` holds the TwoRoom / PushT presets |
 | `gplan/data.py` | NumPy helpers shared by both sides (valid start rows, `STABLEWM_HOME`) |
 | `scripts/` | `encode_dataset.py`, `train.py`, `export_planner.py`, `evaluate.py`, `convert_lewm.py` |
 | `tests/` | JAX vs PyTorch parity (cost, policy, losses and gradients), closed-form TB/VarGrad optimum, end to end |

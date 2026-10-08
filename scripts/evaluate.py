@@ -1,7 +1,8 @@
-"""Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom.
+"""Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom or PushT.
 
     # head-to-head, one wandb run with a comparison table
     python scripts/evaluate.py --policy gflow cem --planner outputs/gplaner.pt
+    python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 
     # just the GFlowNet, no cost re-ranking (1 sample per replanning step)
     python scripts/evaluate.py --policy gflow --planner outputs/gplaner.pt --gflow-select sample
@@ -14,15 +15,20 @@ were actually executed (recomputed identically for every solver) and the number
 of plans the world model had to score per replanning step, i.e. the planner's
 compute (CEM = num_samples * cem_steps, GFlow best-of-N = num_samples, GFlow
 sample/mean = 0). Protocol details: gplan/evaluation.py.
+
+--task picks the env, dataset, LeWM checkpoint and reset keys (gplan.evaluation.TASKS);
+--env / --dataset / --wm override single fields.
 """
 
 import argparse
+from pathlib import Path
 
 import stable_worldmodel as swm
 import torch
 import wandb
 
-from gplan.evaluation import build_policy, evaluate, fit_normalizers, sample_eval_starts
+from gplan.data import STABLEWM_HOME
+from gplan.evaluation import TASKS, build_policy, evaluate, fit_normalizers, sample_eval_starts
 from gplan.policy import load_planner
 
 
@@ -33,9 +39,10 @@ def parse_args():
     p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
     p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
                    help="[gflow] execute the cheapest of --num-samples plans, a single sample, or the mean plan")
-    p.add_argument("--wm", default="tworoom/lewm", help="LeWM ckpt name relative to $STABLEWM_HOME")
-    p.add_argument("--dataset", default="tworoom")
-    p.add_argument("--env", default="swm/TwoRoom-v1")
+    p.add_argument("--task", default="tworoom", choices=sorted(TASKS), help="evaluation task preset")
+    p.add_argument("--wm", default=None, help="LeWM ckpt name relative to $STABLEWM_HOME (default: from --task)")
+    p.add_argument("--dataset", default=None, help="dataset name (default: from --task)")
+    p.add_argument("--env", default=None, help="gymnasium env id (default: from --task)")
     p.add_argument("--num-eval", type=int, default=50)
     p.add_argument("--goal-offset", type=int, default=25)
     p.add_argument("--eval-budget", type=int, default=50)
@@ -52,16 +59,24 @@ def parse_args():
     p.add_argument("--wandb-project", default="gplan")
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None)
-    return p.parse_args()
+    args = p.parse_args()
+    task = TASKS[args.task]
+    args.wm = args.wm or task.wm
+    args.dataset = args.dataset or task.dataset
+    args.env = args.env or task.env
+    return args, task
 
 
 def check_planner_matches(planner, train_args, args, env_action_dim):
     """Warn about train/eval protocol mismatches and assert the plan layout fits the env."""
     if train_args is not None:
         wandb.config.update({"planner_train_args": train_args})
-        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon)):
+        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon), ("dataset", args.dataset)):
             if k in train_args and train_args[k] != eval_v:
                 print(f"WARNING: planner was trained with {k}={train_args[k]} but eval uses {eval_v}")
+        eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
+        if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
+            print(f"WARNING: planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
     action_dim = env_action_dim * args.action_block
     assert planner.horizon == args.horizon * action_dim, (
         f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")
@@ -88,14 +103,14 @@ def print_comparison(rows, successes, policies, num_eval):
 
 
 def main():
-    args = parse_args()
+    args, task = parse_args()
     torch.manual_seed(args.seed)
     wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args), mode=args.wandb_mode,
                job_type="eval")
 
     # -- data: start/goal pairs (shared by every policy) and normalization stats
-    dataset = swm.data.HDF5Dataset(args.dataset, keys_to_cache=["action", "proprio"])
-    process = fit_normalizers(dataset, ["action", "proprio"])
+    dataset = swm.data.HDF5Dataset(args.dataset, keys_to_cache=list(task.cache_keys))
+    process = fit_normalizers(dataset, task.cache_keys)
     episodes, start_steps = sample_eval_starts(dataset, args.num_eval, args.goal_offset, args.seed)
 
     # -- shared frozen world model and (optionally) the trained planner
@@ -112,7 +127,7 @@ def main():
     for name in args.policy:
         print(f"\n===== {name} =====")
         policy, solver, plans_per_replan = build_policy(name, args, wm, process, planner)
-        res = evaluate(name, policy, args, dataset, episodes, start_steps)
+        res = evaluate(name, policy, args, task, dataset, episodes, start_steps)
         successes[name] = res.pop("episode_successes")
         metrics = {**res, "plans_per_replan": plans_per_replan, **(solver.summary() if solver else {})}
         rows.append((name, metrics))
