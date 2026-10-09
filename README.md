@@ -60,6 +60,9 @@ python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_H
 python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 90 --out outputs/pusht
 python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 
+# test-time refinement diagnostic (env): best-of-64 vs the same samples after 20 Adam steps through LeWM
+python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
+
 # headroom probe (no env): LeWM cost of best-of-64 samples before / after gradient refinement,
 # next to prior shooting and the dataset's expert actions
 python scripts/probe_headroom.py outputs/tb-beta120

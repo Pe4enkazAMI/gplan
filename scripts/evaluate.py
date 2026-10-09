@@ -7,6 +7,9 @@
     # just the GFlowNet, no cost re-ranking (1 sample per replanning step)
     python scripts/evaluate.py --policy gflow --planner outputs/gplaner.pt --gflow-select sample
 
+    # test-time refinement diagnostic: best-of-64 vs the same samples refined through LeWM, plus CEM
+    python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
+
     python scripts/evaluate.py --policy cem        # LeWM paper planner
     python scripts/evaluate.py --policy random     # floor
 
@@ -14,13 +17,15 @@ Per policy we log success_rate, wall-clock time, the LeWM cost of the plans that
 were actually executed (recomputed identically for every solver) and the number
 of plans the world model had to score per replanning step, i.e. the planner's
 compute (CEM = num_samples * cem_steps, GFlow best-of-N = num_samples, GFlow
-sample/mean = 0). Protocol details: gplan/evaluation.py.
+sample/mean = 0, GFlow refine = num_samples * (refine_steps + 1) forward passes plus
+refine_steps backward passes). Protocol details: gplan/evaluation.py.
 
 --task picks the env, dataset, LeWM checkpoint and reset keys (gplan.evaluation.TASKS);
 --env / --dataset / --wm override single fields.
 """
 
 import argparse
+from itertools import combinations
 from pathlib import Path
 
 import stable_worldmodel as swm
@@ -34,11 +39,17 @@ from gplan.policy import load_planner
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--policy", nargs="+", choices=["gflow", "cem", "random"], default=["gflow", "cem"],
-                   help="policies to evaluate on the same episodes")
+    p.add_argument("--policy", nargs="+", choices=["gflow", "gflow-refine", "cem", "random"],
+                   default=["gflow", "cem"], help="policies to evaluate on the same episodes")
     p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
     p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
                    help="[gflow] execute the cheapest of --num-samples plans, a single sample, or the mean plan")
+    p.add_argument("--refine-steps", type=int, default=20, help="[gflow-refine] Adam steps on the actions")
+    p.add_argument("--refine-lr", type=float, default=0.05, help="[gflow-refine] Adam step size (z-scored units)")
+    p.add_argument("--refine-objective", default="target", choices=["target", "cost"],
+                   help="[gflow-refine] minimize beta*J - log N(A) or J alone")
+    p.add_argument("--refine-beta", type=float, default=None,
+                   help="[gflow-refine] per-dim beta of the target objective (default: the planner's training beta)")
     p.add_argument("--task", default="tworoom", choices=sorted(TASKS), help="evaluation task preset")
     p.add_argument("--wm", default=None, help="LeWM ckpt name relative to $STABLEWM_HOME (default: from --task)")
     p.add_argument("--dataset", default=None, help="dataset name (default: from --task)")
@@ -83,23 +94,33 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
 
 
 def print_comparison(rows, successes, policies, num_eval):
-    """Console + wandb comparison table, and per-episode agreement when exactly two policies ran."""
+    """Console + wandb comparison table, and per-episode agreement for every pair of policies."""
     cols = ["policy", "success_rate", "plan_cost", "plans_per_replan", "solve_time_s", "eval_time_s"]
     table = wandb.Table(columns=cols)
-    print(f"\n{'policy':8s} {'success%':>9s} {'plan_cost':>10s} {'plans/replan':>13s} {'solve_s':>8s} {'total_s':>8s}")
+    print(f"\n{'policy':12s} {'success%':>9s} {'plan_cost':>10s} {'plans/replan':>13s} {'solve_s':>8s} {'total_s':>8s}")
     for name, m in rows:
         vals = [m.get(c, float("nan")) for c in cols[1:]]
         table.add_data(name, *vals)
-        print(f"{name:8s} {vals[0]:9.1f} {vals[1]:10.2f} {vals[2]:13d} {vals[3]:8.1f} {vals[4]:8.1f}")
-    if len(successes) == 2:
-        a, b = policies
+        print(f"{name:12s} {vals[0]:9.1f} {vals[1]:10.2f} {vals[2]:13d} {vals[3]:8.1f} {vals[4]:8.1f}")
+    for a, b in combinations(policies, 2):
         both = (successes[a] & successes[b]).sum()
         only_a = (successes[a] & ~successes[b]).sum()
         only_b = (~successes[a] & successes[b]).sum()
-        print(f"\nepisodes solved by both: {both}, only {a}: {only_a}, only {b}: {only_b}, "
-              f"neither: {num_eval - both - only_a - only_b}")
-        wandb.log({"both_solved": int(both), f"only_{a}": int(only_a), f"only_{b}": int(only_b)})
+        print(f"{a} vs {b}: solved by both {both}, only {a} {only_a}, only {b} {only_b}, "
+              f"neither {num_eval - both - only_a - only_b}")
+        wandb.log({f"{a}_vs_{b}/both": int(both), f"{a}_vs_{b}/only_{a}": int(only_a),
+                   f"{a}_vs_{b}/only_{b}": int(only_b)})
     wandb.log({"comparison": table})
+
+
+def refine_settings(args, train_args, embed_dim):
+    """Settings for the gflow-refine solver; beta and s^2 default to the planner's training values."""
+    train_args = train_args or {}
+    beta = args.refine_beta if args.refine_beta is not None else train_args.get("beta")
+    if args.refine_objective == "target" and beta is None:
+        raise ValueError("--refine-beta is needed: the planner checkpoint does not record its training beta")
+    return dict(steps=args.refine_steps, lr=args.refine_lr, objective=args.refine_objective,
+                beta=(beta or 0.0) / embed_dim, reference_var=train_args.get("ref_var", 1.0))
 
 
 def main():
@@ -114,19 +135,22 @@ def main():
     episodes, start_steps = sample_eval_starts(dataset, args.num_eval, args.goal_offset, args.seed)
 
     # -- shared frozen world model and (optionally) the trained planner
-    wm = planner = None
+    wm = planner = refine = None
     if any(name != "random" for name in args.policy):
         wm = swm.policy.AutoCostModel(args.wm).to(args.device)
         wm.eval().requires_grad_(False)
-    if "gflow" in args.policy:
+    if any(name.startswith("gflow") for name in args.policy):
         planner, train_args = load_planner(args.planner, args.device)
         check_planner_matches(planner, train_args, args, dataset.get_col_data("action").shape[1])
+        if "gflow-refine" in args.policy:
+            refine = refine_settings(args, train_args, embed_dim=planner.Z[0].in_features // 2)
+            print(f"gflow-refine: {refine}")
 
     # -- evaluate every policy on the same episodes
     rows, successes = [], {}
     for name in args.policy:
         print(f"\n===== {name} =====")
-        policy, solver, plans_per_replan = build_policy(name, args, wm, process, planner)
+        policy, solver, plans_per_replan = build_policy(name, args, wm, process, planner, refine)
         res = evaluate(name, policy, args, task, dataset, episodes, start_steps)
         successes[name] = res.pop("episode_successes")
         metrics = {**res, "plans_per_replan": plans_per_replan, **(solver.summary() if solver else {})}

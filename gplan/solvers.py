@@ -5,7 +5,27 @@ import time
 import numpy as np
 import torch
 
-from gplan.lewm import encode, lewm_cost
+from gplan.lewm import encode, lewm_cost, lewm_cost_grad
+
+
+def refine_plans(wm, z_start, z_goal, plans, steps, lr, beta, reference_var, objective="target"):
+    """K Adam steps on the actions of every plan, through the frozen LeWM (weights untouched).
+
+    Same procedure as `gplan_jax.probe.refine_plans`:
+        objective="target": minimize beta * J(A) + ||A||^2 / (2 s^2)   (-log of the GFlowNet target)
+        objective="cost":   minimize J(A)
+    plans: (N, T, A) z-scored actions. Returns refined plans (no grad).
+    """
+    plans = plans.detach().clone().requires_grad_(True)
+    opt = torch.optim.Adam([plans], lr=lr)
+    for _ in range(steps):
+        loss = lewm_cost_grad(wm, z_start, z_goal, plans)
+        if objective == "target":
+            loss = beta * loss + plans.pow(2).sum(dim=(1, 2)) / (2 * reference_var)
+        opt.zero_grad()
+        loss.sum().backward()  # plans are independent, so this is each plan's own gradient
+        opt.step()
+    return plans.detach()
 
 
 class GFlowSolver:
@@ -14,22 +34,30 @@ class GFlowSolver:
     For every env: encode start/goal with the frozen LeWM, sample `num_samples`
     action plans from the GPlaner and pick one according to `select`:
         "min-cost": score all plans with the LeWM cost and execute the cheapest (best-of-N);
+        "refine":   refine all plans with `refine["steps"]` Adam steps through LeWM, then
+                    execute the cheapest (a test-time search diagnostic, not the amortized planner);
         "sample":   execute a single sample as is;
         "mean":     execute the policy's mean plan (deterministic).
     With "sample"/"mean" the cost of the single plan is still computed, for logging only.
+    `refine` = dict(steps, lr, beta, reference_var, objective), used only by "refine".
     """
 
-    def __init__(self, wm, sampler, num_samples=64, select="min-cost", device="cpu"):
-        assert select in ("min-cost", "sample", "mean"), select
+    def __init__(self, wm, sampler, num_samples=64, select="min-cost", device="cpu", refine=None):
+        assert select in ("min-cost", "refine", "sample", "mean"), select
+        assert select != "refine" or refine is not None, "select='refine' needs the refine settings"
         self.wm = wm
         self.sampler = sampler
-        self.num_samples = num_samples if select == "min-cost" else 1
+        self.num_samples = num_samples if select in ("min-cost", "refine") else 1
         self.select = select
         self.device = device
+        self.refine = refine
 
     @property
     def plans_per_replan(self):
-        """Plans the world model scores per replanning step (0 if the plan is executed unscored)."""
+        """WM rollouts per replanning step (0 if the plan is executed unscored).
+        "refine" also costs one backward pass per refinement step."""
+        if self.select == "refine":
+            return self.num_samples * (self.refine["steps"] + 1)
         return self.num_samples if self.select == "min-cost" else 0
 
     def configure(self, *, action_space, n_envs, config):
@@ -69,6 +97,9 @@ class GFlowSolver:
         z_goal = z_goal.repeat_interleave(N, dim=0)
         mode = "mean" if self.select == "mean" else "sample"
         plans = self.sampler.rollout(z_start, z_goal, mode=mode).view(E * N, self.horizon, self.action_dim)
+        if self.select == "refine":
+            with torch.enable_grad():
+                plans = refine_plans(self.wm, z_start, z_goal, plans, **self.refine)
         costs = lewm_cost(self.wm, z_start, z_goal, plans).view(E, N)
 
         best = costs.argmin(dim=1)

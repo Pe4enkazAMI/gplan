@@ -53,7 +53,7 @@ def encode(wm, pixels):
 
 @torch.no_grad()
 def lewm_cost(wm, z_start, z_goal, actions, history_size=3):
-    """J(A, c): LeWM planning cost of an action plan.
+    """J(A, c): LeWM planning cost of an action plan (no gradient; see `lewm_cost_grad`).
 
     Rolls the frozen predictor forward from z_start through `actions` and returns
     the squared distance of the final predicted embedding to z_goal. This is
@@ -66,6 +66,11 @@ def lewm_cost(wm, z_start, z_goal, actions, history_size=3):
     Returns:
         (B,) cost per plan.
     """
+    return lewm_cost_grad(wm, z_start, z_goal, actions, history_size)
+
+
+def lewm_cost_grad(wm, z_start, z_goal, actions, history_size=3):
+    """`lewm_cost` with autograd left on, so J can be differentiated w.r.t. the actions."""
     emb = z_start.unsqueeze(1)  # (B, 1, D)
     for t in range(actions.shape[1]):
         act_emb = wm.action_encoder(actions[:, : t + 1])

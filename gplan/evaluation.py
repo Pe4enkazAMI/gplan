@@ -85,14 +85,18 @@ def sample_eval_starts(dataset, num_eval, goal_offset, seed):
     return rows[ep_col].tolist(), rows["step_idx"].tolist()
 
 
-def build_policy(name, args, wm, process, planner):
-    """(policy, cost-logging solver or None, plans scored by the WM per replanning step)."""
+def build_policy(name, args, wm, process, planner, refine=None):
+    """(policy, cost-logging solver or None, plans scored by the WM per replanning step).
+
+    "gflow" uses --gflow-select; "gflow-refine" is best-of-N after test-time refinement with the
+    `refine` settings (see gplan.solvers.refine_plans)."""
     if name == "random":
         return swm.policy.RandomPolicy(seed=args.seed), None, 0
 
-    if name == "gflow":
-        assert planner is not None, "--planner is required for the gflow policy"
-        solver = GFlowSolver(wm, Sampler(planner), args.num_samples or 64, args.gflow_select, args.device)
+    if name in ("gflow", "gflow-refine"):
+        assert planner is not None, f"--planner is required for the {name} policy"
+        select = "refine" if name == "gflow-refine" else args.gflow_select
+        solver = GFlowSolver(wm, Sampler(planner), args.num_samples or 64, select, args.device, refine=refine)
         plans_per_replan = solver.plans_per_replan
     else:  # LeWM paper planner (le-wm/config/eval/solver/cem.yaml); batch_size=1 is required by JEPA.criterion
         solver = swm.solver.CEMSolver(
