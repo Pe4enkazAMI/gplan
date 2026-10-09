@@ -60,6 +60,10 @@ python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_H
 python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 90 --out outputs/pusht
 python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 
+# headroom probe (no env): LeWM cost of best-of-64 samples before / after gradient refinement,
+# next to prior shooting and the dataset's expert actions
+python scripts/probe_headroom.py outputs/tb-beta120
+
 # re-export a JAX checkpoint to PyTorch, if needed
 python scripts/export_planner.py outputs/tb-beta120
 
@@ -82,12 +86,13 @@ training step includes JIT compilation (~10 s).
 | `gplan_jax/data.py` | (start, goal = start + 25) pairs from the precomputed latents |
 | `gplan_jax/convert.py` | Weights PyTorch ↔ Equinox (LeWM predictor, GPlaner) |
 | `gplan_jax/checkpoint.py` | Save / load `.eqx` checkpoints, export the PyTorch `.pt` |
+| `gplan_jax/probe.py` | Headroom probe: gradient refinement through LeWM, expert plans from dataset actions |
 | `gplan/lewm.py` | PyTorch LeWM: load, `encode`, `lewm_cost` (reference implementation) |
 | `gplan/precompute.py` | Encode a dataset's frames into latents |
 | `gplan/policy.py` | PyTorch `GPlaner` + `Sampler`, used by evaluation |
 | `gplan/solvers.py`, `gplan/evaluation.py` | `stable_worldmodel` solvers and the LeWM evaluation protocol; `TASKS` holds the TwoRoom / PushT presets |
 | `gplan/data.py` | NumPy helpers shared by both sides (valid start rows, `STABLEWM_HOME`) |
-| `scripts/` | `encode_dataset.py`, `train.py`, `export_planner.py`, `evaluate.py`, `convert_lewm.py` |
+| `scripts/` | `encode_dataset.py`, `train.py`, `export_planner.py`, `evaluate.py`, `probe_headroom.py`, `convert_lewm.py` |
 | `tests/` | JAX vs PyTorch parity (cost, policy, losses and gradients), closed-form TB/VarGrad optimum, end to end |
 
 The losses take the plan costs as data, and `step_log_probs` scores any plan, so new plan

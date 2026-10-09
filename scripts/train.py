@@ -17,6 +17,7 @@ import wandb
 
 from gplan.data import STABLEWM_HOME
 from gplan_jax import checkpoint
+from gplan_jax.convert import load_lewm_predictor
 from gplan_jax.data import LatentPairs
 from gplan_jax.policy import GPlaner
 from gplan_jax.train import TrainConfig, linear_beta_schedule, train
@@ -55,19 +56,12 @@ def parse_args():
     return p.parse_args()
 
 
-def load_cost_model(ckpt):
-    """Load the PyTorch LeWM on CPU and convert its predictor to Equinox; torch is not used afterwards."""
-    from gplan.lewm import load_lewm
-    from gplan_jax.convert import lewm_from_torch
-    return lewm_from_torch(load_lewm(ckpt, "cpu"))
-
-
 def main():
     args = parse_args()
     jax.config.update("jax_default_matmul_precision", args.matmul_precision)
     print("JAX devices:", jax.devices())
 
-    cost_model = load_cost_model(args.ckpt)
+    cost_model = load_lewm_predictor(args.ckpt)  # torch is used only here, on CPU
     pairs = LatentPairs(args.latents or STABLEWM_HOME / f"{args.dataset}_latents", args.goal_offset,
                         expected_ckpt=args.ckpt)
     d = pairs.embed_dim

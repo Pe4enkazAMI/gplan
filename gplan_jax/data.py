@@ -24,15 +24,23 @@ class LatentPairs:
         meta = np.load(f"{prefix}_meta.npz")
         self.goal_offset = goal_offset
         self.valid = valid_start_rows(meta["ep_idx"], meta["step_idx"], goal_offset)
+        self.actions = meta["action"]  # (N, env_action_dim), raw dataset actions (not normalized)
 
     @property
     def embed_dim(self):
         return self.latents.shape[1]
 
+    def sample_rows(self, n, rng):
+        """`n` distinct valid start rows, sorted."""
+        return np.sort(rng.choice(self.valid, size=n, replace=False))
+
+    def pairs(self, rows):
+        """(z_start, z_goal) for the given start rows, each (len(rows), D) float32."""
+        return (np.asarray(self.latents[rows], dtype=np.float32),
+                np.asarray(self.latents[rows + self.goal_offset], dtype=np.float32))
+
     def batches(self, n_batches, batch_size, seed=0):
         """Yield `n_batches` of (z_start, z_goal), each (batch_size, D) float32."""
         rng = np.random.default_rng(seed)
         for _ in range(n_batches):
-            rows = np.sort(rng.choice(self.valid, size=batch_size, replace=False))
-            yield (np.asarray(self.latents[rows], dtype=np.float32),
-                   np.asarray(self.latents[rows + self.goal_offset], dtype=np.float32))
+            yield self.pairs(self.sample_rows(batch_size, rng))
