@@ -63,6 +63,14 @@ python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pus
 # test-time refinement diagnostic (env): best-of-64 vs the same samples after 20 Adam steps through LeWM
 python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
 
+# EXP k-warmup: train on goal offsets k in [25, 50]. k stays 25 for the first 10k steps, then the
+# largest k grows linearly to 50 over 10k steps; half of the pairs always keep k = 25.
+# Evaluate at --goal-offset 25 (no regression?) and 50 (closer to CEM?)
+python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 192 \
+    --goal-offset 25 --goal-offset-max 50 --goal-offset-warmup-start 10000 --goal-offset-warmup 10000 \
+    --out outputs/pusht-kwarm
+python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht-kwarm.pt --goal-offset 50
+
 # headroom probe (no env): LeWM cost of best-of-64 samples before / after gradient refinement,
 # next to prior shooting and the dataset's expert actions
 python scripts/probe_headroom.py outputs/tb-beta120
@@ -86,7 +94,7 @@ training step includes JIT compilation (~10 s).
 | `gplan_jax/policy.py` | `GPlaner`, `rollout`, teacher-forced `step_log_probs`, reference log-prob |
 | `gplan_jax/losses.py` | TB and VarGrad on `xi = log P_F + βJ − log N(A)`, diagnostics |
 | `gplan_jax/train.py` | Optimizer (clip + Adam, separate lr for log Z), jitted train step, training loop |
-| `gplan_jax/data.py` | (start, goal = start + 25) pairs from the precomputed latents |
+| `gplan_jax/data.py` | (start, goal = start + k) pairs from the precomputed latents; k = 25, or variable with the k-warmup |
 | `gplan_jax/convert.py` | Weights PyTorch ↔ Equinox (LeWM predictor, GPlaner) |
 | `gplan_jax/checkpoint.py` | Save / load `.eqx` checkpoints, export the PyTorch `.pt` |
 | `gplan_jax/probe.py` | Headroom probe: gradient refinement through LeWM, expert plans from dataset actions |

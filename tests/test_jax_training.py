@@ -16,7 +16,7 @@ from gplan.policy import Sampler, load_planner
 from gplan_jax import checkpoint
 from gplan_jax import policy as jp
 from gplan_jax.convert import gplaner_from_torch, gplaner_to_torch, lewm_from_torch
-from gplan_jax.data import LatentPairs
+from gplan_jax.data import LatentPairs, goal_offset_schedule
 from gplan_jax.losses import tb_loss, vargrad_loss
 from gplan_jax.train import TrainConfig, train
 
@@ -150,3 +150,54 @@ def test_latent_pairs_stay_within_episode(tmp_path):
         assert np.all(start_rows % 6 <= 6 - offset - 1)  # goal is inside the same episode
     with pytest.raises(ValueError):
         LatentPairs(tmp_path / "toy_latents", offset, expected_ckpt=tmp_path / "other.ckpt")
+
+
+def toy_latent_pairs(tmp_path, ep_len, n_eps, offset):
+    """Latents whose value is the row index, so a goal latent tells which row (hence which k) was used."""
+    n = ep_len * n_eps
+    np.save(tmp_path / "toy_latents.npy", np.arange(n, dtype=np.float32)[:, None].repeat(4, axis=1))
+    np.savez(tmp_path / "toy_latents_meta.npz", ep_idx=np.repeat(np.arange(n_eps), ep_len),
+             step_idx=np.tile(np.arange(ep_len), n_eps), action=np.zeros((n, 2)))
+    (tmp_path / "toy_latents.json").write_text(json.dumps({"ckpt": str(tmp_path / "x.ckpt")}))
+    return LatentPairs(tmp_path / "toy_latents", offset)
+
+
+def test_goal_offset_schedule():
+    k_max = goal_offset_schedule(25, 50, start=100, warmup=50)
+    assert [k_max(s) for s in (0, 100, 125, 150, 1000)] == [25, 25, 38, 50, 50]  # 37.5 rounds to 38
+    jump = goal_offset_schedule(25, 50, start=100, warmup=0)
+    assert [jump(s) for s in (99, 100)] == [25, 50]
+    assert goal_offset_schedule(25, 25, warmup=10)(5) == 25
+
+
+def test_variable_offsets_stay_in_range_and_episode(tmp_path):
+    ep_len, offset, max_offset = 20, 3, 10
+    pairs = toy_latent_pairs(tmp_path, ep_len, n_eps=5, offset=offset)
+    ks = []
+    for z_start, z_goal in pairs.batches(50, 16, max_offset=max_offset, fixed_frac=0.0):
+        start, goal = z_start[:, 0].astype(int), z_goal[:, 0].astype(int)
+        k = goal - start
+        assert np.all(start % ep_len <= ep_len - offset - 1)  # start distribution as with a fixed k
+        assert np.all(goal // ep_len == start // ep_len)      # goal inside the start's episode
+        assert np.all((k >= offset) & (k <= max_offset))
+        ks.append(k)
+    assert set(np.concatenate(ks)) == set(range(offset, max_offset + 1))  # every k in range shows up
+
+    def fixed_share(frac):
+        k = np.concatenate([g[:, 0] - s[:, 0] for s, g in pairs.batches(200, 16, max_offset=max_offset,
+                                                                          fixed_frac=frac)])
+        return np.mean(k == offset)
+    assert fixed_share(1.0) == 1.0
+    # 0.5 fixed, plus the variable draws that land on k = 3: 1/8 of them for starts far from the
+    # episode end, more near it (their range is cut at the episode end); about 0.61 here
+    assert 0.55 < fixed_share(0.5) < 0.7
+
+
+def test_k_warmup_leaves_batches_unchanged_until_it_widens(tmp_path):
+    pairs = toy_latent_pairs(tmp_path, ep_len=20, n_eps=5, offset=3)
+    fixed = list(pairs.batches(6, 8, seed=1))
+    warm = list(pairs.batches(6, 8, seed=1, max_offset=goal_offset_schedule(3, 10, start=4, warmup=2)))
+    for (s0, g0), (s1, g1) in zip(fixed[:4], warm[:4]):
+        np.testing.assert_array_equal(s0, s1)
+        np.testing.assert_array_equal(g0, g1)
+    assert any(np.any(g[:, 0] - s[:, 0] > 3) for s, g in warm[4:])
