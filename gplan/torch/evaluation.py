@@ -96,25 +96,27 @@ def sample_eval_starts(dataset, num_eval, goal_offset, seed):
 
 
 def build_policy(name, args, wm, process, planner, refine=None):
-    """(policy, cost-logging solver or None, plans scored by the WM per replanning step).
+    """(policy, cost-logging solver or None, compute per replanning step).
 
+    compute = {"plans_per_replan": forward rollouts of the world model,
+               "backward_per_replan": backward passes through it (gflow-refine only)}.
     "gflow" uses --gflow-select; "gflow-refine" is best-of-N after test-time refinement with the
     `refine` settings (see gplan.torch.solvers.refine_plans)."""
     if name == "random":
-        return swm.policy.RandomPolicy(seed=args.seed), None, 0
+        return swm.policy.RandomPolicy(seed=args.seed), None, {"plans_per_replan": 0, "backward_per_replan": 0}
 
     if name in ("gflow", "gflow-refine"):
         assert planner is not None, f"--planner is required for the {name} policy"
         select = "refine" if name == "gflow-refine" else args.gflow_select
         solver = GFlowSolver(wm, Sampler(planner), args.gflow_samples, select, args.device, refine=refine,
                              seed=args.seed)
-        plans_per_replan = solver.plans_per_replan
+        compute = {"plans_per_replan": solver.plans_per_replan, "backward_per_replan": solver.backward_per_replan}
     else:  # LeWM paper planner (le-wm/config/eval/solver/cem.yaml); batch_size=1 is required by JEPA.criterion
         solver = swm.solver.CEMSolver(
             model=wm, batch_size=1, num_samples=args.cem_samples, var_scale=1.0,
             n_steps=args.cem_steps, topk=args.cem_topk, device=args.device, seed=args.seed,
         )
-        plans_per_replan = solver.num_samples * solver.n_steps
+        compute = {"plans_per_replan": solver.num_samples * solver.n_steps, "backward_per_replan": 0}
 
     solver = CostLoggingSolver(solver, wm, args.device)
     config = swm.PlanConfig(horizon=args.horizon, receding_horizon=args.horizon, action_block=args.action_block)
@@ -123,7 +125,7 @@ def build_policy(name, args, wm, process, planner, refine=None):
         solver=solver, config=config, process=process,
         transform={"pixels": transform, "goal": transform},
     )
-    return policy, solver, plans_per_replan
+    return policy, solver, compute
 
 
 def evaluate(name, policy, args, task, dataset, episodes, start_steps):

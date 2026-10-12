@@ -64,8 +64,9 @@ def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom"):
 def outcome(metrics):
     """Everything that must be identical between two runs of the same policy (timings excluded;
     the random policy has no planner, so no plan costs)."""
-    return {k: metrics.get(k) for k in ("success_rate", "episode_successes", "plan_cost", "plan_cost_first", "replans",
-                                    "plans_per_replan")}
+    return {k: metrics.get(k) for k in ("success_rate", "episode_successes", "plan_cost", "plan_cost_first",
+                                        "plan_cost_replan0", "plan_cost_replan1", "action_absmax", "replans",
+                                        "plans_per_replan", "backward_per_replan")}
 
 
 def test_cem_does_not_depend_on_gflow(home, tmp_path):
@@ -90,6 +91,13 @@ def test_every_policy_is_reproducible(home, tmp_path):
     for name in ("gflow", "gflow-refine", "cem"):
         assert np.isfinite(first[name]["plan_cost"]) and first[name]["replans"] == 2, name  # budget 50 = 2 x 25 steps
     assert first["gflow-refine"]["plans_per_replan"] == 64 * (3 + 1)
+    assert first["gflow-refine"]["backward_per_replan"] == 64 * 3
+    assert first["cem"]["backward_per_replan"] == first["gflow"]["backward_per_replan"] == 0
+    for name in ("gflow", "cem"):  # per-replan costs average to the overall one (equal env counts)
+        m = first[name]
+        assert np.isclose((m["plan_cost_replan0"] + m["plan_cost_replan1"]) / 2, m["plan_cost"])
+        assert m["plan_cost_first"] == m["plan_cost_replan0"]
+        assert 0 < m["action_absmax"] <= m["action_absmax_max"]
 
 
 def test_pusht_resets_from_the_full_state(home, tmp_path):

@@ -50,6 +50,7 @@ def test_refine_solver_lowers_the_cost_of_the_executed_plan():
         costs[select] = np.asarray(out["costs"])
     assert costs["refine"].mean() < costs["min-cost"].mean()
     assert GFlowSolver(wm, None, 8, "refine", refine=refine).plans_per_replan == 8 * 31
+    assert GFlowSolver(wm, None, 8, "refine", refine=refine).backward_per_replan == 8 * 30
 
 
 def test_refine_does_not_touch_world_model_weights():

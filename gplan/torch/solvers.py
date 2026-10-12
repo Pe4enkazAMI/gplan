@@ -58,11 +58,16 @@ class GFlowSolver:
 
     @property
     def plans_per_replan(self):
-        """WM rollouts per replanning step (0 if the plan is executed unscored).
-        "refine" also costs one backward pass per refinement step."""
+        """Forward rollouts of the world model per replanning step (0 if the plan is executed unscored)."""
         if self.select == "refine":
-            return self.num_samples * (self.refine["steps"] + 1)
+            return self.num_samples * (self.refine["steps"] + 1)  # every Adam step, then the final scoring
         return self.num_samples if self.select == "min-cost" else 0
+
+    @property
+    def backward_per_replan(self):
+        """Backward passes through the world model per replanning step (one per plan and Adam step;
+        a backward pass costs about twice a forward one)."""
+        return self.num_samples * self.refine["steps"] if self.select == "refine" else 0
 
     def configure(self, *, action_space, n_envs, config):
         self._action_dim = int(np.prod(action_space.shape[1:]))
@@ -113,18 +118,22 @@ class GFlowSolver:
 
 
 class CostLoggingSolver:
-    """Wraps any swm Solver and records the LeWM cost of the plan it returns on every replanning step.
+    """Wraps any swm Solver and records, on every replanning step, the LeWM cost and the largest
+    |action| of the plan it returns.
 
     The cost is recomputed here with `lewm_cost` on the executed plan, so it means the same
     thing for every solver (CEM's own `outputs["costs"]` is the mean over its elites, not the
-    cost of the mean plan it executes). Also accumulates solver wall-clock time.
+    cost of the mean plan it executes). Actions are in LeWM's z-scored space, so |a| is in units
+    of the dataset's std: values well above ~3 are outside what LeWM was trained on. Also
+    accumulates solver wall-clock time.
     """
 
     def __init__(self, solver, wm, device="cpu"):
         self.solver = solver
         self.wm = wm
         self.device = device
-        self.costs = []      # one (n_envs,) array per replanning step
+        self.costs = []           # one (n_envs,) array per replanning step
+        self.action_absmax = []   # one (n_envs,) array per replanning step: max |a| of each executed plan
         self.solve_time = 0.0
 
     def configure(self, **kwargs):
@@ -154,11 +163,17 @@ class CostLoggingSolver:
         z_goal = encode(self.wm, info_dict["goal"][:, -1].to(self.device))
         plans = out["actions"].to(self.device).view(self.n_envs, self.horizon, self.action_dim)
         self.costs.append(lewm_cost(self.wm, z_start, z_goal, plans).cpu().numpy())
+        self.action_absmax.append(plans.abs().amax(dim=(1, 2)).cpu().numpy())
         return out
 
     def summary(self):
+        """plan_cost: mean over replans and envs (including envs that already reached the goal, which
+        keep replanning); plan_cost_replan<i>: mean over envs at replan i; action_absmax: mean over
+        replans and envs of the executed plan's max |a|, action_absmax_max: the largest of them."""
         if not self.costs:
             return {"plan_cost": float("nan"), "replans": 0, "solve_time_s": self.solve_time}
-        costs = np.stack(self.costs)  # (replans, n_envs)
+        costs, absmax = np.stack(self.costs), np.stack(self.action_absmax)  # (replans, n_envs)
         return {"plan_cost": float(costs.mean()), "plan_cost_first": float(costs[0].mean()),
+                **{f"plan_cost_replan{i}": float(c.mean()) for i, c in enumerate(costs)},
+                "action_absmax": float(absmax.mean()), "action_absmax_max": float(absmax.max()),
                 "replans": int(costs.shape[0]), "solve_time_s": self.solve_time}

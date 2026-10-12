@@ -15,11 +15,13 @@
     python scripts/evaluate.py --policy random     # floor
 
 Per policy we log success_rate, wall-clock time, the LeWM cost of the plans that
-were actually executed (recomputed identically for every solver) and the number
-of plans the world model had to score per replanning step, i.e. the planner's
-compute (CEM = cem_samples * cem_steps, GFlow best-of-N = gflow_samples, GFlow
-sample/mean = 0, GFlow refine = gflow_samples * (refine_steps + 1) forward passes plus
-refine_steps backward passes). Protocol details: gplan/torch/evaluation.py.
+were actually executed (recomputed identically for every solver; overall, first replan and
+per replan), the largest |action| of the executed plans (z-scored, so in dataset stds) and
+the planner's compute per replanning step as world-model passes:
+    fwd/replan  forward rollouts: CEM = cem_samples * cem_steps, GFlow best-of-N = gflow_samples,
+                GFlow sample/mean = 0, GFlow refine = gflow_samples * (refine_steps + 1)
+    bwd/replan  backward passes, ~2x a forward each: GFlow refine = gflow_samples * refine_steps
+Protocol details: gplan/torch/evaluation.py.
 
 Each policy has its own settings (--gflow-*, --refine-*, --cem-*), so CEM runs with the
 same configuration whatever GFlow checkpoint or flags are evaluated next to it.
@@ -120,13 +122,16 @@ def write_results(path, args, rows, successes):
 
 def print_comparison(rows, successes, policies, num_eval):
     """Console + wandb comparison table, and per-episode agreement for every pair of policies."""
-    cols = ["policy", "success_rate", "plan_cost", "plans_per_replan", "solve_time_s", "eval_time_s"]
+    cols = ["policy", "success_rate", "plan_cost", "action_absmax", "plans_per_replan", "backward_per_replan",
+            "solve_time_s", "eval_time_s"]
     table = wandb.Table(columns=cols)
-    print(f"\n{'policy':12s} {'success%':>9s} {'plan_cost':>10s} {'plans/replan':>13s} {'solve_s':>8s} {'total_s':>8s}")
+    print(f"\n{'policy':12s} {'success%':>9s} {'plan_cost':>10s} {'max|a|':>7s} {'fwd/replan':>11s} "
+          f"{'bwd/replan':>11s} {'solve_s':>8s} {'total_s':>8s}")
     for name, m in rows:
         vals = [m.get(c, float("nan")) for c in cols[1:]]
         table.add_data(name, *vals)
-        print(f"{name:12s} {vals[0]:9.1f} {vals[1]:10.2f} {vals[2]:13d} {vals[3]:8.1f} {vals[4]:8.1f}")
+        print(f"{name:12s} {vals[0]:9.1f} {vals[1]:10.2f} {vals[2]:7.2f} {vals[3]:11d} {vals[4]:11d} "
+              f"{vals[5]:8.1f} {vals[6]:8.1f}")
     for a, b in combinations(policies, 2):
         both = (successes[a] & successes[b]).sum()
         only_a = (successes[a] & ~successes[b]).sum()
@@ -177,10 +182,10 @@ def main():
     rows, successes = [], {}
     for name in args.policy:
         print(f"\n===== {name} =====")
-        policy, solver, plans_per_replan = build_policy(name, args, wm, process, planner, refine)
+        policy, solver, compute = build_policy(name, args, wm, process, planner, refine)
         res = evaluate(name, policy, args, task, dataset, episodes, start_steps)
         successes[name] = res.pop("episode_successes")
-        metrics = {**res, "plans_per_replan": plans_per_replan, **(solver.summary() if solver else {})}
+        metrics = {**res, **compute, **(solver.summary() if solver else {})}
         rows.append((name, metrics))
         wandb.log({f"{name}/{k}": v for k, v in metrics.items()})
         print({k: (round(v, 3) if isinstance(v, float) else v) for k, v in metrics.items()})
