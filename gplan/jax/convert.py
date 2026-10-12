@@ -18,7 +18,12 @@ import torch
 from gplan.jax import lewm as jl
 from gplan.jax.policy import GPlaner
 
-_KEY = jax.random.key(0)  # layers are created with throwaway random weights, then overwritten
+
+def _key():
+    """Layers are created with throwaway random weights, then overwritten. A function, not a
+    module-level key: creating a key starts the JAX backend, which must wait until scripts have
+    set XLA_FLAGS (see `scripts/train.py --deterministic`)."""
+    return jax.random.key(0)
 
 
 def _arr(t):
@@ -26,7 +31,7 @@ def _arr(t):
 
 
 def linear(layer: torch.nn.Linear) -> eqx.nn.Linear:
-    out = eqx.nn.Linear(layer.in_features, layer.out_features, use_bias=layer.bias is not None, key=_KEY)
+    out = eqx.nn.Linear(layer.in_features, layer.out_features, use_bias=layer.bias is not None, key=_key())
     out = eqx.tree_at(lambda l: l.weight, out, _arr(layer.weight))
     if layer.bias is not None:
         out = eqx.tree_at(lambda l: l.bias, out, _arr(layer.bias))
@@ -67,7 +72,7 @@ def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
     `history_size` defaults to the predictor's context length (its number of position embeddings, 3 for LeWM)."""
     enc, pred, proj = wm.action_encoder, wm.predictor, wm.pred_proj
     conv = enc.patch_embed  # Conv1d(kernel_size=1) == Linear on each step
-    patch = eqx.nn.Linear(conv.in_channels, conv.out_channels, key=_KEY)
+    patch = eqx.nn.Linear(conv.in_channels, conv.out_channels, key=_key())
     patch = eqx.tree_at(lambda l: (l.weight, l.bias), patch, (_arr(conv.weight[:, :, 0]), _arr(conv.bias)))
 
     tr = pred.transformer
@@ -113,14 +118,14 @@ def gplaner_to_torch(model: GPlaner) -> dict:
     return {k: torch.from_numpy(np.array(v, dtype=np.float32)) for k, v in params.items()}
 
 
-def gplaner_from_torch(torch_model, key=_KEY) -> GPlaner:
+def gplaner_from_torch(torch_model, key=None) -> GPlaner:
     """PyTorch `gplan.torch.policy.GPlaner` -> JAX GPlaner with identical weights and hyperparameters."""
     width, in_dim = torch_model.in_proj[0].weight.shape
     state_dim = torch_model.Z[0].in_features // 2
     model = GPlaner(state_dim=state_dim, horizon=torch_model.horizon, hidden_size=width // 3,
                     n_layers=len(torch_model.backbone), log_std_min=torch_model.log_std_min,
                     log_std_max=torch_model.log_std_max, action_dim=torch_model.action_dim,
-                    n_components=torch_model.n_components, key=key)
+                    n_components=torch_model.n_components, key=_key() if key is None else key)
     return eqx.tree_at(
         lambda m: (m.in_proj, m.backbone, m.out_proj, m.Z),
         model,

@@ -38,7 +38,14 @@ import torch
 import wandb
 
 from gplan.data import STABLEWM_HOME
-from gplan.torch.evaluation import build_policy, evaluate, fit_normalizers, sample_eval_starts, TASKS
+from gplan.torch.evaluation import (
+    build_policy,
+    evaluate,
+    fit_normalizers,
+    sample_eval_starts,
+    TASKS,
+    use_deterministic_algorithms,
+)
 from gplan.torch.policy import load_planner
 
 
@@ -72,6 +79,8 @@ def parse_args():
     p.add_argument("--img-size", type=int, default=224)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--deterministic", action="store_true",
+                   help="deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower)")
     p.add_argument("--video-dir", default=None, help="save rollout videos under <dir>/<policy>/ (off by default)")
     p.add_argument("--results-json", type=Path, default=None,
                    help="also write every policy's metrics and per-episode successes to this .json")
@@ -141,6 +150,8 @@ def refine_settings(args, train_args, embed_dim):
 
 def main():
     args, task = parse_args()
+    if args.deterministic:
+        use_deterministic_algorithms()
     torch.manual_seed(args.seed)
     wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args), mode=args.wandb_mode,
                job_type="eval")

@@ -9,6 +9,7 @@ success rates are directly comparable, and the pairs are drawn exactly as
 le-wm/eval.py draws them, so they match LeWM's reported CEM numbers.
 """
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,6 +62,15 @@ class Standardizer:
 
     def inverse_transform(self, x):
         return x * self.std + self.mean
+
+
+def use_deterministic_algorithms():
+    """Bit-reproducible PyTorch on GPU (deterministic cuDNN / cuBLAS kernels, slower). Call it before the
+    first CUDA operation. Ops without a deterministic kernel warn instead of failing (warn_only)."""
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def fit_normalizers(dataset, cols):

@@ -82,7 +82,8 @@ def test_cem_does_not_depend_on_gflow(home, tmp_path):
 def test_every_policy_is_reproducible(home, tmp_path):
     args = ("--policy", "gflow", "gflow-refine", "cem", "random", "--planner", str(home / "mixture.pt"),
             "--refine-steps", "3")
-    first, second = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args)
+    # the second run also checks that --deterministic changes nothing on CPU
+    first, second = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args, "--deterministic")
     assert list(first) == ["gflow", "gflow-refine", "cem", "random"]
     for name in first:
         assert outcome(first[name]) == outcome(second[name]), name

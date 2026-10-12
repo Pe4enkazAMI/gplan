@@ -12,6 +12,7 @@ See gplan/jax/losses.py for the target distribution and the two losses.
 """
 
 import argparse
+import os
 from pathlib import Path
 
 import jax
@@ -61,6 +62,8 @@ def parse_args():
     p.add_argument("--ref-var", type=float, default=1.0, help="variance s^2 of the N(0, s^2 I) reference measure")
     p.add_argument("--matmul-precision", default="highest", choices=["highest", "high", "default"],
                    help="float32 matmul precision on GPU; 'default' allows TF32 (faster, less exact than torch)")
+    p.add_argument("--deterministic", action="store_true",
+                   help="deterministic XLA GPU kernels (--xla_gpu_deterministic_ops): bit-identical reruns, slower")
     p.add_argument("--log-every", type=int, default=10)
     p.add_argument("--out", type=Path, default=Path("outputs/gplaner"), help="checkpoint prefix")
     p.add_argument("--wandb-project", default="gplan")
@@ -71,6 +74,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.deterministic:  # XLA reads its flags when the backend starts, i.e. at the first jax.devices() below
+        os.environ["XLA_FLAGS"] = f"{os.environ.get('XLA_FLAGS', '')} --xla_gpu_deterministic_ops=true".strip()
     jax.config.update("jax_default_matmul_precision", args.matmul_precision)
     print("JAX devices:", jax.devices())
 
