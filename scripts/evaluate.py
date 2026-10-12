@@ -18,9 +18,9 @@ were actually executed (recomputed identically for every solver) and the number
 of plans the world model had to score per replanning step, i.e. the planner's
 compute (CEM = num_samples * cem_steps, GFlow best-of-N = num_samples, GFlow
 sample/mean = 0, GFlow refine = num_samples * (refine_steps + 1) forward passes plus
-refine_steps backward passes). Protocol details: gplan/evaluation.py.
+refine_steps backward passes). Protocol details: gplan/torch/evaluation.py.
 
---task picks the env, dataset, LeWM checkpoint and reset keys (gplan.evaluation.TASKS);
+--task picks the env, dataset, LeWM checkpoint and reset keys (gplan.torch.evaluation.TASKS);
 --env / --dataset / --wm override single fields.
 """
 
@@ -33,8 +33,8 @@ import torch
 import wandb
 
 from gplan.data import STABLEWM_HOME
-from gplan.evaluation import TASKS, build_policy, evaluate, fit_normalizers, sample_eval_starts
-from gplan.policy import load_planner
+from gplan.torch.evaluation import build_policy, evaluate, fit_normalizers, sample_eval_starts, TASKS
+from gplan.torch.policy import load_planner
 
 
 def parse_args():

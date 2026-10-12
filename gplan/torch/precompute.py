@@ -19,11 +19,11 @@ import torch
 from torchvision.transforms import v2 as transforms
 
 from gplan.data import episode_column
-from gplan.lewm import IMAGENET, encode
+from gplan.torch.lewm import encode, IMAGENET
 
 
 def batch_transform(img_size=224):
-    """Same preprocessing as `gplan.lewm.img_transform`, applied to a (B, C, H, W) uint8 batch."""
+    """Same preprocessing as `gplan.torch.lewm.img_transform`, applied to a (B, C, H, W) uint8 batch."""
     return transforms.Compose([
         transforms.ToDtype(torch.float32, scale=True),
         transforms.Normalize(**IMAGENET),

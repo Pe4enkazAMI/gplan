@@ -128,7 +128,7 @@ class LeWMPredictor(eqx.Module):
 
     def plan_cost(self, z_start, z_goal, actions):
         """J(A, c) for one plan: roll the predictor from z_start through actions (T, A), return
-        the squared distance of the final predicted embedding to z_goal. Same as `gplan.lewm.lewm_cost`."""
+        the squared distance of the final predicted embedding to z_goal. Same as `gplan.torch.lewm.lewm_cost`."""
         act_emb = self.action_encoder(actions)  # per-step, so embedding the whole plan at once is equivalent
         embs = [z_start]
         for t in range(actions.shape[0]):

@@ -2,7 +2,7 @@ import pytest
 import torch
 from conftest import A, B, D, T
 
-from gplan.policy import GPlaner, Sampler, load_planner, save_planner
+from gplan.torch.policy import GPlaner, load_planner, Sampler, save_planner
 
 
 @pytest.mark.parametrize("action_dim, n_components", [(1, 1), (A, 1), (A, 3)])

@@ -11,8 +11,8 @@ from pathlib import Path
 
 import torch
 
-from gplan.lewm import STABLEWM_HOME, load_lewm
-from gplan.precompute import cache_info, encode_dataset
+from gplan.torch.lewm import load_lewm, STABLEWM_HOME
+from gplan.torch.precompute import cache_info, encode_dataset
 
 
 def main():

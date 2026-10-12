@@ -16,7 +16,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from gplan_jax.policy import reference_log_prob, step_log_probs
+from gplan.jax.policy import reference_log_prob, step_log_probs
 
 
 def plan_terms(model, z_start, z_goal, actions, cost, reference_var):

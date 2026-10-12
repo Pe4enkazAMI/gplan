@@ -18,9 +18,11 @@ import torch
 from huggingface_hub import hf_hub_download
 from transformers import ViTConfig, ViTModel
 
-from gplan.lewm import STABLEWM_HOME  # also puts the le-wm submodule on sys.path
-from jepa import JEPA  # noqa: E402
-from module import MLP, ARPredictor, Embedder  # noqa: E402
+from gplan.torch.lewm import STABLEWM_HOME  # also puts the le-wm submodule on sys.path
+
+# isort: split
+from jepa import JEPA  # le-wm modules, importable once gplan.torch.lewm is imported
+from module import ARPredictor, Embedder, MLP
 
 VIT_SIZES = {  # as in stable_pretraining.backbone.utils.vit_hf
     "tiny": dict(hidden_size=192, num_hidden_layers=12, num_attention_heads=3),

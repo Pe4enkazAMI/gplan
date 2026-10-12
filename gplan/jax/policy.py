@@ -1,7 +1,7 @@
 """GPlaner in Equinox: the goal-conditioned autoregressive policy over action plans.
 
-Same architecture and parameter layout as `gplan.policy.GPlaner` (PyTorch), so weights convert in
-both directions (`gplan_jax.convert`). Everything here works on ONE plan; batch with `jax.vmap`.
+Same architecture and parameter layout as `gplan.torch.policy.GPlaner` (PyTorch), so weights convert in
+both directions (`gplan.jax.convert`). Everything here works on ONE plan; batch with `jax.vmap`.
 
 A plan is a flat buffer of `horizon = n_steps * action_dim` values, step-major. Step t is predicted
 from (z_start, z_goal, buffer with steps >= t zeroed) as a mixture of `n_components` diagonal

@@ -9,7 +9,7 @@ saved without it or to write the .pt somewhere else.
 import argparse
 from pathlib import Path
 
-from gplan_jax import checkpoint
+from gplan.jax import checkpoint
 
 
 def main():

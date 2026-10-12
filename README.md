@@ -23,7 +23,7 @@ export STABLEWM_HOME=~/.stable_worldmodel  # datasets (*.h5), LeWM checkpoints a
 ```
 
 `le-wm` is a git submodule. Its `jepa.py` and `module.py` must be importable under those names
-because LeWM checkpoints are pickled `jepa.JEPA` objects; importing `gplan.lewm` handles that.
+because LeWM checkpoints are pickled `jepa.JEPA` objects; importing `gplan.torch.lewm` handles that.
 
 ### DGX Spark / GB10
 
@@ -89,23 +89,23 @@ training step includes JIT compilation (~10 s).
 
 | Path | Contents |
 | --- | --- |
-| `gplan_jax/lewm.py` | LeWM predictor in Equinox (action encoder, AdaLN transformer, projector) and the cost J(A, c) |
-| `gplan_jax/policy.py` | `GPlaner` (Gaussian or Gaussian-mixture steps), `rollout`, teacher-forced `step_log_probs`, reference log-prob |
-| `gplan_jax/losses.py` | TB and VarGrad on `xi = log P_F + βJ − log N(A)`, diagnostics |
-| `gplan_jax/train.py` | Optimizer (clip + Adam, separate lr for log Z), jitted train step (optionally with MALA plans), training loop |
-| `gplan_jax/mala.py` | MALA local search on plans toward the GFlowNet target (off-policy training samples) |
-| `gplan_jax/data.py` | (start, goal = start + 25) pairs from the precomputed latents |
-| `gplan_jax/convert.py` | Weights PyTorch ↔ Equinox (LeWM predictor, GPlaner) |
-| `gplan_jax/checkpoint.py` | Save / load `.eqx` checkpoints, export the PyTorch `.pt` |
-| `gplan_jax/probe.py` | Headroom probe: gradient refinement through LeWM, expert plans from dataset actions |
-| `gplan/lewm.py` | PyTorch LeWM: load, `encode`, `lewm_cost` (reference implementation) |
-| `gplan/precompute.py` | Encode a dataset's frames into latents |
-| `gplan/policy.py` | PyTorch `GPlaner` + `Sampler`, used by evaluation |
-| `gplan/solvers.py`, `gplan/evaluation.py` | `stable_worldmodel` solvers and the LeWM evaluation protocol; `TASKS` holds the TwoRoom / PushT presets |
+| `gplan/jax/lewm.py` | LeWM predictor in Equinox (action encoder, AdaLN transformer, projector) and the cost J(A, c) |
+| `gplan/jax/policy.py` | `GPlaner` (Gaussian or Gaussian-mixture steps), `rollout`, teacher-forced `step_log_probs`, reference log-prob |
+| `gplan/jax/losses.py` | TB and VarGrad on `xi = log P_F + βJ − log N(A)`, diagnostics |
+| `gplan/jax/train.py` | Optimizer (clip + Adam, separate lr for log Z), jitted train step (optionally with MALA plans), training loop |
+| `gplan/jax/mala.py` | MALA local search on plans toward the GFlowNet target (off-policy training samples) |
+| `gplan/jax/latents.py` | (start, goal = start + 25) pairs from the precomputed latents |
+| `gplan/jax/convert.py` | Weights PyTorch ↔ Equinox (LeWM predictor, GPlaner) |
+| `gplan/jax/checkpoint.py` | Save / load `.eqx` checkpoints, export the PyTorch `.pt` |
+| `gplan/jax/probe.py` | Headroom probe: gradient refinement through LeWM, expert plans from dataset actions |
+| `gplan/torch/lewm.py` | PyTorch LeWM: load, `encode`, `lewm_cost` (reference implementation) |
+| `gplan/torch/precompute.py` | Encode a dataset's frames into latents |
+| `gplan/torch/policy.py` | PyTorch `GPlaner` + `Sampler`, used by evaluation |
+| `gplan/torch/solvers.py`, `gplan/torch/evaluation.py` | `stable_worldmodel` solvers and the LeWM evaluation protocol; `TASKS` holds the TwoRoom / PushT presets |
 | `gplan/data.py` | NumPy helpers shared by both sides (valid start rows, `STABLEWM_HOME`) |
 | `scripts/` | `encode_dataset.py`, `train.py`, `export_planner.py`, `evaluate.py`, `probe_headroom.py`, `convert_lewm.py` |
 | `tests/` | JAX vs PyTorch parity (cost, policy, losses and gradients), closed-form TB/VarGrad optimum, end to end |
 
 The losses take the plan costs as data, and `step_log_probs` scores any plan, so new plan
-sources (expert segments, replay, local search) plug into `gplan_jax/train.py` without touching
+sources (expert segments, replay, local search) plug into `gplan/jax/train.py` without touching
 the policy or the losses.

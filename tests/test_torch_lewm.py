@@ -1,7 +1,7 @@
 import torch
-from conftest import B, D, HS, T, A
+from conftest import A, B, D, HS, T
 
-from gplan.lewm import encode, lewm_cost
+from gplan.torch.lewm import encode, lewm_cost
 
 
 def test_encode_shape(wm, batch):

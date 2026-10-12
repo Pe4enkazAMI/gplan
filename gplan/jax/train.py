@@ -11,9 +11,9 @@ import jax.numpy as jnp
 import optax
 import wandb
 
-from gplan_jax.losses import tb_loss, vargrad_loss
-from gplan_jax.mala import mala
-from gplan_jax.policy import rollout
+from gplan.jax.losses import tb_loss, vargrad_loss
+from gplan.jax.mala import mala
+from gplan.jax.policy import rollout
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ class TrainConfig:
     action_dim: int = 1          # world-model action dim per plan step (frameskip * env action dim)
     reference_var: float = 1.0   # s^2 of the N(0, s^2 I) reference measure
     grad_clip: float = 0.0       # max global grad norm; <= 0 disables clipping
-    # MALA local search (gplan_jax/mala.py): from step `ls_start` on, every `ls_every` steps, `ls_steps`
+    # MALA local search (gplan.jax.mala): from step `ls_start` on, every `ls_every` steps, `ls_steps`
     # MALA steps from each on-policy plan; the resulting plans are added to the batch as off-policy
     # samples (ls_steps = 0: off)
     ls_steps: int = 0

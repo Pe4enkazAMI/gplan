@@ -2,7 +2,7 @@
 
 Measures, on (start, goal) latent pairs, the LeWM cost J of best-of-N policy samples before and after
 a few gradient steps through the frozen LeWM, next to prior shooting and the dataset's expert actions.
-No env is involved; refinement is a measurement, not part of the planner. See gplan_jax/probe.py.
+No env is involved; refinement is a measurement, not part of the planner. See gplan/jax/probe.py.
 
     python scripts/probe_headroom.py outputs/tb-beta90-warm1k-20k
     python scripts/probe_headroom.py outputs/pusht-run --n-pairs 4096 --steps 50 --objective cost
@@ -22,10 +22,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from gplan.data import STABLEWM_HOME
-from gplan_jax import checkpoint
-from gplan_jax.convert import load_lewm_predictor
-from gplan_jax.data import LatentPairs
-from gplan_jax.probe import expert_plans, lewm_action_stats, make_probe
+from gplan.jax import checkpoint
+from gplan.jax.convert import load_lewm_predictor
+from gplan.jax.latents import LatentPairs
+from gplan.jax.probe import expert_plans, lewm_action_stats, make_probe
 
 
 def parse_args():

@@ -1,20 +1,14 @@
 """Headroom probe: refinement lowers the objective, expert plans have the right layout, the probe runs."""
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from conftest import A, D, T
-from test_jax_lewm import make_wm
+from conftest import A, D, make_wm, T
+from toy_costs import QuadraticCost
 
-from gplan_jax import policy as jp
-from gplan_jax.convert import lewm_from_torch
-from gplan_jax.probe import expert_plans, lewm_action_stats, make_probe, refine_plans
-
-
-class QuadraticCost(eqx.Module):
-    def cost(self, z_start, z_goal, plans):
-        return jnp.sum(plans ** 2, axis=(1, 2))
+from gplan.jax import policy as jp
+from gplan.jax.convert import lewm_from_torch
+from gplan.jax.probe import expert_plans, lewm_action_stats, make_probe, refine_plans
 
 
 def test_refine_reaches_the_minimum_of_a_quadratic():

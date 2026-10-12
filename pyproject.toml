@@ -36,8 +36,19 @@ jax = ["jax==0.11.2", "equinox==0.13.8", "optax==0.2.8"]
 jax-cuda = ["jax[cuda13]==0.11.2", "equinox==0.13.8", "optax==0.2.8"]
 
 [tool.setuptools]
-packages = ["gplan", "gplan_jax"]
+packages = ["gplan", "gplan.torch", "gplan.jax"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["le-wm", "stable-pretraining"]
+
+[tool.ruff.lint]
+select = ["F", "I"]   # pyflakes + import order
+
+[tool.ruff.lint.isort]
+known-first-party = ["gplan"]
+order-by-type = false

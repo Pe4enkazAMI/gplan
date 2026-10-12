@@ -1,8 +1,8 @@
 """Weight conversion between PyTorch and Equinox.
 
     lewm_from_torch(wm)          trained PyTorch LeWM (jepa.JEPA)  -> LeWMPredictor (JAX)
-    gplaner_from_torch(model)    PyTorch gplan.policy.GPlaner      -> gplan_jax.policy.GPlaner
-    gplaner_to_torch(model)      gplan_jax.policy.GPlaner          -> PyTorch state_dict (same keys as gplan.policy.GPlaner)
+    gplaner_from_torch(model)    PyTorch gplan.torch.policy.GPlaner      -> gplan.jax.policy.GPlaner
+    gplaner_to_torch(model)      gplan.jax.policy.GPlaner          -> PyTorch state_dict (same keys as gplan.torch.policy.GPlaner)
 
 PyTorch and Equinox store a Linear weight the same way, (out_features, in_features), so arrays are
 copied as they are. This module imports torch; the JAX training code only uses it at startup and
@@ -15,8 +15,8 @@ import jax.numpy as jnp
 import numpy as np
 import torch
 
-from gplan_jax import lewm as jl
-from gplan_jax.policy import GPlaner
+from gplan.jax import lewm as jl
+from gplan.jax.policy import GPlaner
 
 _KEY = jax.random.key(0)  # layers are created with throwaway random weights, then overwritten
 
@@ -92,7 +92,7 @@ def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
 
 def load_lewm_predictor(ckpt_path):
     """Load a PyTorch LeWM `*_object.ckpt` on CPU and return its predictor as an Equinox module."""
-    from gplan.lewm import load_lewm  # puts le-wm on sys.path, needed to unpickle the checkpoint
+    from gplan.torch.lewm import load_lewm  # puts le-wm on sys.path, needed to unpickle the checkpoint
     return lewm_from_torch(load_lewm(ckpt_path, "cpu"))
 
 
@@ -103,7 +103,7 @@ def _linear_params(prefix, layer):
 
 
 def gplaner_to_torch(model: GPlaner) -> dict:
-    """JAX GPlaner -> PyTorch state_dict with exactly the keys of `gplan.policy.GPlaner`."""
+    """JAX GPlaner -> PyTorch state_dict with exactly the keys of `gplan.torch.policy.GPlaner`."""
     params = {**_linear_params("in_proj.0", model.in_proj),
               **_linear_params("out_proj", model.out_proj),
               **_linear_params("Z.0", model.Z[0]),
@@ -114,7 +114,7 @@ def gplaner_to_torch(model: GPlaner) -> dict:
 
 
 def gplaner_from_torch(torch_model, key=_KEY) -> GPlaner:
-    """PyTorch `gplan.policy.GPlaner` -> JAX GPlaner with identical weights and hyperparameters."""
+    """PyTorch `gplan.torch.policy.GPlaner` -> JAX GPlaner with identical weights and hyperparameters."""
     width, in_dim = torch_model.in_proj[0].weight.shape
     state_dim = torch_model.Z[0].in_features // 2
     model = GPlaner(state_dim=state_dim, horizon=torch_model.horizon, hidden_size=width // 3,

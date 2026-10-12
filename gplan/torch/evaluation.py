@@ -18,9 +18,9 @@ import stable_worldmodel as swm
 import torch
 
 from gplan.data import episode_column, valid_start_rows
-from gplan.lewm import img_transform
-from gplan.policy import Sampler
-from gplan.solvers import CostLoggingSolver, GFlowSolver
+from gplan.torch.lewm import img_transform
+from gplan.torch.policy import Sampler
+from gplan.torch.solvers import CostLoggingSolver, GFlowSolver
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,7 @@ def build_policy(name, args, wm, process, planner, refine=None):
     """(policy, cost-logging solver or None, plans scored by the WM per replanning step).
 
     "gflow" uses --gflow-select; "gflow-refine" is best-of-N after test-time refinement with the
-    `refine` settings (see gplan.solvers.refine_plans)."""
+    `refine` settings (see gplan.torch.solvers.refine_plans)."""
     if name == "random":
         return swm.policy.RandomPolicy(seed=args.seed), None, 0
 

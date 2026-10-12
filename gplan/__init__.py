@@ -1,10 +1,15 @@
-"""GPlan, PyTorch side: precompute and evaluation (training lives in `gplan_jax`).
+"""GPlan: GFlowNet samplers as amortized planners for LeWorldModel (LeWM).
 
-Modules
-    lewm        frozen LeWorldModel: loading, encoding, the reference planning cost J(A, c)
-    data        NumPy dataset helpers shared with gplan_jax (valid start rows, STABLEWM_HOME)
-    precompute  encode every frame of a dataset into latents
-    policy      GPlaner (autoregressive Gaussian policy), Sampler, checkpoint I/O
-    solvers     stable_worldmodel solvers: GFlowNet best-of-N, cost logging wrapper
-    evaluation  LeWM evaluation protocol on TwoRoom (needs stable_worldmodel)
+The code is split by framework, which is also a split by role:
+
+    gplan.data    NumPy dataset helpers shared by both sides (STABLEWM_HOME, valid start rows)
+    gplan.torch   PyTorch: everything that needs the original LeWM. Precomputing latents,
+                  the PyTorch policy used at evaluation, solvers, the evaluation protocol
+    gplan.jax     JAX (Equinox + Optax): training on precomputed latents, the LeWM predictor
+                  ported to Equinox, losses, MALA, the headroom probe, checkpoints, and the
+                  weight conversion PyTorch <-> Equinox
+
+The subpackages are named after the frameworks they use; inside them `import torch` /
+`import jax` still mean the real libraries (absolute imports). Run code from the repository
+root (scripts/, pytest), not from inside gplan/.
 """

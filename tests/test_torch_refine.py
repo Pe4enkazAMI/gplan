@@ -5,12 +5,11 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-from conftest import A, B, D, IMG, T
-from test_jax_lewm import make_wm
+from conftest import A, B, D, IMG, make_wm, T
 
-from gplan.lewm import lewm_cost
-from gplan.policy import GPlaner, Sampler
-from gplan.solvers import GFlowSolver, refine_plans
+from gplan.torch.lewm import lewm_cost
+from gplan.torch.policy import GPlaner, Sampler
+from gplan.torch.solvers import GFlowSolver, refine_plans
 
 
 def lewm_with_action_effect():
@@ -20,8 +19,8 @@ def lewm_with_action_effect():
 
 @pytest.mark.parametrize("objective", ["target", "cost"])
 def test_torch_refinement_matches_jax_probe(objective):
-    jax_probe = pytest.importorskip("gplan_jax.probe")
-    from gplan_jax.convert import lewm_from_torch
+    jax_probe = pytest.importorskip("gplan.jax.probe")
+    from gplan.jax.convert import lewm_from_torch
 
     wm = lewm_with_action_effect()
     g = torch.Generator().manual_seed(0)

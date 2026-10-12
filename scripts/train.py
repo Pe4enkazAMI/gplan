@@ -8,7 +8,7 @@ the .pt is what scripts/evaluate.py loads.
     python scripts/train.py --n-components 4             # EXP: mixture of 4 Gaussians per plan step
     python scripts/train.py --ls-steps 10                 # EXP: + 10 MALA steps per plan as off-policy data
 
-See gplan_jax/losses.py for the target distribution and the two losses.
+See gplan/jax/losses.py for the target distribution and the two losses.
 """
 
 import argparse
@@ -18,11 +18,11 @@ import jax
 import wandb
 
 from gplan.data import STABLEWM_HOME
-from gplan_jax import checkpoint
-from gplan_jax.convert import load_lewm_predictor
-from gplan_jax.data import LatentPairs
-from gplan_jax.policy import GPlaner
-from gplan_jax.train import TrainConfig, linear_beta_schedule, train
+from gplan.jax import checkpoint
+from gplan.jax.convert import load_lewm_predictor
+from gplan.jax.latents import LatentPairs
+from gplan.jax.policy import GPlaner
+from gplan.jax.train import linear_beta_schedule, train, TrainConfig
 
 
 def parse_args():

@@ -13,7 +13,7 @@ from torchvision.transforms import v2 as transforms
 
 from gplan.data import STABLEWM_HOME  # noqa: F401  (re-exported for scripts)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LEWM_DIR = REPO_ROOT / "le-wm"
 IMAGENET = dict(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 

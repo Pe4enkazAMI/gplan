@@ -18,7 +18,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from gplan_jax.policy import rollout
+from gplan.jax.policy import rollout
 
 
 def refine_plans(cost_model, z_start, z_goal, plans, beta, reference_var, steps, lr, objective="target"):

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 pytest.importorskip("stable_worldmodel")
-from gplan.evaluation import TASKS, Standardizer, sample_eval_starts  # noqa: E402
+from gplan.torch.evaluation import sample_eval_starts, Standardizer, TASKS  # noqa: E402
 
 
 class FakeDataset:

@@ -7,10 +7,10 @@ import pytest
 import torch
 from conftest import A, B, D, T
 
-from gplan.policy import GPlaner as TorchGPlaner
-from gplan.policy import Sampler
-from gplan_jax import policy as jp
-from gplan_jax.convert import gplaner_from_torch, gplaner_to_torch
+from gplan.jax import policy as jp
+from gplan.jax.convert import gplaner_from_torch, gplaner_to_torch
+from gplan.torch.policy import GPlaner as TorchGPlaner
+from gplan.torch.policy import Sampler
 
 
 @pytest.fixture(params=[(1, 1), (A, 1), (A, 3)], ids=["scalar", "blocked", "blocked-mixture"])

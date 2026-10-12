@@ -3,7 +3,7 @@
 A checkpoint with prefix `outputs/run` is three files:
     outputs/run.eqx    Equinox weights (eqx.tree_serialise_leaves)
     outputs/run.json   {"model_kwargs": ..., "train_args": ...}
-    outputs/run.pt     the same weights as a `gplan.policy` checkpoint, for scripts/evaluate.py
+    outputs/run.pt     the same weights as a `gplan.torch.policy` checkpoint, for scripts/evaluate.py
 """
 
 import json
@@ -13,12 +13,12 @@ import equinox as eqx
 import jax
 import torch
 
-from gplan_jax.convert import gplaner_to_torch
-from gplan_jax.policy import GPlaner
+from gplan.jax.convert import gplaner_to_torch
+from gplan.jax.policy import GPlaner
 
 
 def export_torch(path, model, model_kwargs, train_args=None):
-    """Write `model` as a `gplan.policy.save_planner`-style .pt file."""
+    """Write `model` as a `gplan.torch.policy.save_planner`-style .pt file."""
     torch.save({"state_dict": gplaner_to_torch(model), "model_kwargs": model_kwargs, "train_args": train_args}, path)
 
 

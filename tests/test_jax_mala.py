@@ -1,27 +1,15 @@
 """MALA local search samples the GFlowNet target, and off-policy training on its plans works."""
 
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from conftest import D
+from toy_costs import DoubleWell, QuadraticCost
 
-from gplan_jax import policy as jp
-from gplan_jax.mala import mala
-from gplan_jax.train import TrainConfig, adapt_step_size, train
-
-
-class QuadraticCost(eqx.Module):
-    def cost(self, z_start, z_goal, plans):
-        return jnp.sum(plans ** 2, axis=(1, 2))
-
-
-class DoubleWell(eqx.Module):
-    """One scalar action, J(a) = (a^2 - 4)^2: two equally likely modes at a = -2 and a = +2."""
-
-    def cost(self, z_start, z_goal, plans):
-        return (plans[:, 0, 0] ** 2 - 4.0) ** 2
+from gplan.jax import policy as jp
+from gplan.jax.mala import mala
+from gplan.jax.train import adapt_step_size, train, TrainConfig
 
 
 def test_mala_samples_the_gaussian_target():

@@ -17,7 +17,7 @@ plans because both losses only need log P_F of a given plan (teacher forcing).
 import jax
 import jax.numpy as jnp
 
-from gplan_jax.policy import reference_log_prob
+from gplan.jax.policy import reference_log_prob
 
 
 def mala(cost_model, key, z_start, z_goal, actions, beta, reference_var, action_dim, steps, step_size):

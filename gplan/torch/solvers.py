@@ -5,13 +5,13 @@ import time
 import numpy as np
 import torch
 
-from gplan.lewm import encode, lewm_cost, lewm_cost_grad
+from gplan.torch.lewm import encode, lewm_cost, lewm_cost_grad
 
 
 def refine_plans(wm, z_start, z_goal, plans, steps, lr, beta, reference_var, objective="target"):
     """K Adam steps on the actions of every plan, through the frozen LeWM (weights untouched).
 
-    Same procedure as `gplan_jax.probe.refine_plans`:
+    Same procedure as `gplan.jax.probe.refine_plans`:
         objective="target": minimize beta * J(A) + ||A||^2 / (2 s^2)   (-log of the GFlowNet target)
         objective="cost":   minimize J(A)
     plans: (N, T, A) z-scored actions. Returns refined plans (no grad).

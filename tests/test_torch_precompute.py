@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from conftest import IMG
 
-from gplan.lewm import encode, img_transform
-from gplan.precompute import encode_dataset
+from gplan.torch.lewm import encode, img_transform
+from gplan.torch.precompute import encode_dataset
 
 
 def test_encode_dataset_matches_per_frame_encoding(wm, tmp_path):
