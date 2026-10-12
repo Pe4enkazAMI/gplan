@@ -92,13 +92,11 @@ def make_train_step(optimizer, cfg: TrainConfig):
     return train_step
 
 
-def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None, seed=0, log_every=10,
-          log_fn=None):
+def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None, seed=0, log_every=10):
     """One optimizer step per (z_start, z_goal) batch. Returns (trained model, list of losses).
 
     `beta` is a float or a callable `step -> beta`. Every step is logged to wandb when a run is
     active; a console summary is printed every `log_every` steps. Step 0 includes compilation time.
-    `log_fn(step) -> dict` adds extra scalars to every step's log (e.g. data schedules).
     """
     beta_fn = beta if callable(beta) else (lambda step: beta)
     optimizer = make_optimizer(model, lr, lr_z, cfg.grad_clip)
@@ -120,8 +118,6 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
         stats.update({"loss/total": losses[-1], "tb/beta": beta_t, "optim/lr": lr,
                       "optim/lr_z": lr if lr_z is None else lr_z, "time/step_s": t_now - t_prev,
                       "time/samples_per_s": len(z_start) * cfg.n_samples / (t_now - t_prev)})
-        if log_fn is not None:
-            stats.update(log_fn(step))
         t_prev = t_now
         if wandb.run is not None:
             wandb.log(stats, step=step)

@@ -13,16 +13,11 @@ def episode_column(names):
     return "episode_idx" if "episode_idx" in names else "ep_idx"
 
 
-def steps_left(ep_idx, step_idx):
-    """For every dataset row, how many rows of its episode come after it (0 for the last frame).
+def valid_start_rows(ep_idx, step_idx, goal_offset):
+    """Dataset rows with at least `goal_offset` steps left in their episode (so row + goal_offset is the goal).
 
     Assumes `step_idx` counts 0, 1, 2, ... within each episode and rows of an episode are contiguous.
     """
     ep_len = np.zeros(ep_idx.max() + 1, dtype=np.int64)
     np.maximum.at(ep_len, ep_idx, step_idx + 1)
-    return ep_len[ep_idx] - step_idx - 1
-
-
-def valid_start_rows(ep_idx, step_idx, goal_offset):
-    """Dataset rows with at least `goal_offset` steps left in their episode (so row + goal_offset is the goal)."""
-    return np.nonzero(steps_left(ep_idx, step_idx) >= goal_offset)[0]
+    return np.nonzero(step_idx <= ep_len[ep_idx] - goal_offset - 1)[0]

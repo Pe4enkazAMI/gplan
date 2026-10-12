@@ -82,15 +82,9 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
     """Warn about train/eval protocol mismatches and assert the plan layout fits the env."""
     if train_args is not None:
         wandb.config.update({"planner_train_args": train_args})
-        for k, eval_v in (("n_steps", args.horizon), ("dataset", args.dataset)):
+        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon), ("dataset", args.dataset)):
             if k in train_args and train_args[k] != eval_v:
                 print(f"WARNING: planner was trained with {k}={train_args[k]} but eval uses {eval_v}")
-        if "goal_offset" in train_args:  # a range [goal_offset, goal_offset_max] with the k-warmup
-            lo = train_args["goal_offset"]
-            hi = train_args.get("goal_offset_max") or lo
-            if not lo <= args.goal_offset <= hi:
-                trained = f"goal_offset={lo}" if lo == hi else f"goal offsets in [{lo}, {hi}]"
-                print(f"WARNING: planner was trained with {trained} but eval uses goal_offset={args.goal_offset}")
         eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
         if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
             print(f"WARNING: planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
