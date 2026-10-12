@@ -1,4 +1,4 @@
-"""Optimizer, jitted train step and training loop."""
+"""Training: optimizer, jitted train step (on-policy plans, optionally + MALA plans), loop, random streams."""
 
 import math
 import time
