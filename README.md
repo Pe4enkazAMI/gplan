@@ -63,10 +63,12 @@ python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pus
 # test-time refinement diagnostic (env): best-of-64 vs the same samples after 20 Adam steps through LeWM
 python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
 
-# EXP mixture policy: --n-components K makes every plan step a mixture of K diagonal Gaussians
-# (policy/weight_max in wandb -> 1 means the components collapsed onto one)
+# EXP mixture policy and MALA local search (off-policy). --n-components K: a mixture of K diagonal
+# Gaussians per plan step. --ls-steps S: every --ls-every steps from --ls-start on, S MALA steps
+# (target beta*J - log N, gradients through LeWM, step size adapted to ~57% acceptance) from each
+# on-policy plan; the results join the batch as off-policy plans. ls/* in wandb: accept, cost_gain, move
 python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 192 \
-    --n-components 4 --out outputs/pusht-mog
+    --n-components 4 --ls-steps 10 --ls-every 4 --ls-start 10000 --out outputs/pusht-mog-mala
 
 # headroom probe (no env): LeWM cost of best-of-64 samples before / after gradient refinement,
 # next to prior shooting and the dataset's expert actions
@@ -90,7 +92,8 @@ training step includes JIT compilation (~10 s).
 | `gplan_jax/lewm.py` | LeWM predictor in Equinox (action encoder, AdaLN transformer, projector) and the cost J(A, c) |
 | `gplan_jax/policy.py` | `GPlaner` (Gaussian or Gaussian-mixture steps), `rollout`, teacher-forced `step_log_probs`, reference log-prob |
 | `gplan_jax/losses.py` | TB and VarGrad on `xi = log P_F + βJ − log N(A)`, diagnostics |
-| `gplan_jax/train.py` | Optimizer (clip + Adam, separate lr for log Z), jitted train step, training loop |
+| `gplan_jax/train.py` | Optimizer (clip + Adam, separate lr for log Z), jitted train step (optionally with MALA plans), training loop |
+| `gplan_jax/mala.py` | MALA local search on plans toward the GFlowNet target (off-policy training samples) |
 | `gplan_jax/data.py` | (start, goal = start + 25) pairs from the precomputed latents |
 | `gplan_jax/convert.py` | Weights PyTorch ↔ Equinox (LeWM predictor, GPlaner) |
 | `gplan_jax/checkpoint.py` | Save / load `.eqx` checkpoints, export the PyTorch `.pt` |

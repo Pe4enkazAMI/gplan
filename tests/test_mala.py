@@ -1,0 +1,65 @@
+"""MALA local search samples the GFlowNet target, and off-policy training on its plans works."""
+
+import equinox as eqx
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+from conftest import D
+
+from gplan_jax import policy as jp
+from gplan_jax.mala import mala
+from gplan_jax.train import TrainConfig, adapt_step_size, train
+
+
+class QuadraticCost(eqx.Module):
+    def cost(self, z_start, z_goal, plans):
+        return jnp.sum(plans ** 2, axis=(1, 2))
+
+
+class DoubleWell(eqx.Module):
+    """One scalar action, J(a) = (a^2 - 4)^2: two equally likely modes at a = -2 and a = +2."""
+
+    def cost(self, z_start, z_goal, plans):
+        return (plans[:, 0, 0] ** 2 - 4.0) ** 2
+
+
+def test_mala_samples_the_gaussian_target():
+    """J = ||A||^2 with N(0, s^2 I): the target is N(0, 1 / (2 beta + 1 / s^2)) per action."""
+    beta, s2, n, H, A = 2.0, 1.0, 4000, 4, 2
+    z = jnp.zeros((n, D))
+    start = jnp.full((n, H), 3.0)  # far from the target's bulk
+    plans, cost, accept = mala(QuadraticCost(), jax.random.key(0), z, z, start, beta, s2, A, steps=400,
+                               step_size=0.05)
+    target_var = 1 / (2 * beta + 1 / s2)
+    assert abs(float(plans.mean())) < 0.02
+    assert abs(float(plans.var()) / target_var - 1) < 0.05
+    np.testing.assert_allclose(np.asarray(cost), np.asarray(jnp.sum(plans ** 2, -1)), rtol=1e-5)
+    assert 0.5 < float(accept) < 1.0
+
+
+def test_mala_with_tiny_steps_accepts_almost_everything():
+    z = jnp.zeros((256, D))
+    start = jax.random.normal(jax.random.key(1), (256, 4))
+    _, _, accept = mala(QuadraticCost(), jax.random.key(0), z, z, start, 2.0, 1.0, 2, steps=20, step_size=1e-6)
+    assert float(accept) > 0.99
+
+
+def test_step_size_adaptation():
+    assert adapt_step_size(0.1, 0.9, 0.574) > 0.1 > adapt_step_size(0.1, 0.2, 0.574)
+    assert adapt_step_size(0.1, 0.9, 0.0) == 0.1  # target 0 keeps the step size fixed
+
+
+@pytest.mark.parametrize("seed", [1, 2])  # seeds where on-policy training alone keeps only one of the two modes
+def test_mixture_with_local_search_covers_both_modes(seed):
+    model = jp.GPlaner(state_dim=D, horizon=1, hidden_size=32, n_components=2, key=jax.random.key(seed))
+    batch = (np.zeros((64, D), np.float32), np.zeros((64, D), np.float32))
+    cfg = TrainConfig(loss_type="tb", n_samples=1, action_dim=1, reference_var=4.0, grad_clip=10.0,
+                      ls_steps=10, ls_step_size=0.01)
+    model, losses = train(model, DoubleWell(), [batch] * 1500, 1.0, cfg, lr=1e-3, lr_z=1e-2, seed=seed,
+                          log_every=10**9)
+    z = jnp.zeros((4000, D))
+    a = jax.vmap(lambda k, s: jp.rollout(model, k, s, s))(jax.random.split(jax.random.key(99), 4000), z)[:, 0]
+    assert abs(float((a > 0).mean()) - 0.5) < 0.1      # both modes, about equally likely
+    assert float(jnp.abs(jnp.abs(a) - 2).mean()) < 0.3  # and the samples sit on them
+    assert np.mean(losses[-100:]) < 0.2

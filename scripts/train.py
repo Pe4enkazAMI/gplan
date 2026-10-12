@@ -6,6 +6,7 @@ the .pt is what scripts/evaluate.py loads.
     python scripts/train.py --beta 120 --wandb-name tb-beta120 --out outputs/tb-beta120
     python scripts/train.py --loss vargrad --n-samples 8
     python scripts/train.py --n-components 4             # EXP: mixture of 4 Gaussians per plan step
+    python scripts/train.py --ls-steps 10                 # EXP: + 10 MALA steps per plan as off-policy data
 
 See gplan_jax/losses.py for the target distribution and the two losses.
 """
@@ -45,6 +46,15 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--lr-z", type=float, default=3e-3, help="learning rate of the log Z head (usually 10-100x --lr)")
     p.add_argument("--grad-clip", type=float, default=10.0, help="max global grad L2 norm; <= 0 disables")
+    p.add_argument("--ls-steps", type=int, default=0,
+                   help="EXP MALA local search: MALA steps from each on-policy plan; the results are added to "
+                        "the batch as off-policy plans (0 = off)")
+    p.add_argument("--ls-every", type=int, default=1, help="EXP MALA: run local search every this many steps")
+    p.add_argument("--ls-start", type=int, default=0,
+                   help="EXP MALA: first step with local search (e.g. after --beta-warmup)")
+    p.add_argument("--ls-step-size", type=float, default=1e-3, help="EXP MALA: initial step size eta")
+    p.add_argument("--ls-target-accept", type=float, default=0.574,
+                   help="EXP MALA: eta is adapted toward this acceptance rate (0 = keep eta fixed)")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--n-batches", type=int, default=1000)
     p.add_argument("--seed", type=int, default=0)
@@ -72,7 +82,9 @@ def main():
                         n_components=args.n_components)
     model = GPlaner(**model_kwargs, key=jax.random.key(args.seed))
     cfg = TrainConfig(loss_type=args.loss, n_samples=args.n_samples, action_dim=args.action_dim,
-                      reference_var=args.ref_var, grad_clip=args.grad_clip)
+                      reference_var=args.ref_var, grad_clip=args.grad_clip, ls_steps=args.ls_steps,
+                      ls_every=args.ls_every, ls_start=args.ls_start, ls_step_size=args.ls_step_size,
+                      ls_target_accept=args.ls_target_accept)
 
     n_params = sum(x.size for x in jax.tree.leaves(model))
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}

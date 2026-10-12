@@ -82,17 +82,20 @@ def test_vargrad_loss_and_grads_match_torch(setup):
     assert_grads_match(grads, torch_model)
 
 
-@pytest.mark.parametrize("loss_type", ["tb", "vargrad"])
-def test_train_converges_to_analytic_solution(loss_type):
+@pytest.mark.parametrize("loss_type, ls_steps", [("tb", 0), ("vargrad", 0), ("tb", 5)],
+                         ids=["tb", "vargrad", "tb-mala"])
+def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     """With J = ||A||^2 and N(0, s^2 I): each action ~ N(0, 1 / (2 beta + 1 / s^2)),
-    log Z = -(H / 2) * log(1 + 2 beta s^2)."""
+    log Z = -(H / 2) * log(1 + 2 beta s^2). With MALA plans in the batch (off-policy) the
+    optimum must be the same."""
     beta, s2, H = 2.0, 1.0, T * A
     K = 1 if loss_type == "tb" else 8
     n_cond = 64 // K
     model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=jax.random.key(0))  # scalar layout
     rng = np.random.default_rng(0)
     batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))
-    cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0)
+    cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0,
+                      ls_steps=ls_steps, ls_step_size=0.05)
 
     # the loss is noisy step to step (on-policy samples), so judge it over the last 100 steps
     model, losses = train(model, QuadraticCost(), [batch] * 2000, beta, cfg, lr=1e-3, lr_z=1e-2, log_every=10**9)
