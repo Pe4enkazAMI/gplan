@@ -21,14 +21,15 @@ from gplan_jax.policy import reference_log_prob, step_log_probs
 
 def plan_terms(model, z_start, z_goal, actions, cost, reference_var):
     """Per-plan quantities; every array has leading dim N = actions.shape[0]."""
-    log_pf_steps, means, stds = jax.vmap(partial(step_log_probs, model))(z_start, z_goal, actions)
+    log_pf_steps, log_w, means, stds = jax.vmap(partial(step_log_probs, model))(z_start, z_goal, actions)
     return {
         "log_pf": log_pf_steps.sum(-1),                             # (N,)  differentiable
         "log_pf_steps": log_pf_steps,                               # (N, n_steps)
         "log_z": jax.vmap(model.log_Z)(z_start, z_goal),            # (N,)  differentiable
         "cost": cost,                                               # (N,)  constant
         "log_ref": reference_log_prob(actions, reference_var),      # (N,)  constant
-        "means": means, "stds": stds,                               # (N, n_steps, A) for diagnostics
+        "log_w": log_w,                                             # (N, n_steps, K) for diagnostics
+        "means": means, "stds": stds,                               # (N, n_steps, K, A) for diagnostics
     }
 
 
@@ -70,7 +71,7 @@ def plan_stats(terms, residual, beta):
     """Scalar diagnostics shared by both losses (same names as the PyTorch version)."""
     terms = jax.lax.stop_gradient(terms)
     residual = jax.lax.stop_gradient(residual)
-    cost, stds = terms["cost"], terms["stds"]
+    cost, stds, w = terms["cost"], terms["stds"], jnp.exp(terms["log_w"])
     std = partial(jnp.std, ddof=1)
     return {
         "tb/residual": residual.mean(),
@@ -93,5 +94,10 @@ def plan_stats(terms, residual, beta):
         "policy/std": stds.mean(),
         "policy/std_min": stds.min(),
         "policy/std_max": stds.max(),
-        "policy/entropy": (0.5 * jnp.log(2 * jnp.pi * jnp.e * stds ** 2)).sum(axis=(1, 2)).mean(),
+        # entropy of a plan's Gaussians; for a mixture, sum_k w_k H(component k), a lower bound
+        # on the mixture entropy (equal for one component)
+        "policy/entropy": (w * (0.5 * jnp.log(2 * jnp.pi * jnp.e * stds ** 2)).sum(-1)).sum(axis=(1, 2)).mean(),
+        # mixture weights: weight_max -> 1 means the components collapsed onto one
+        "policy/weight_max": w.max(-1).mean(),
+        "policy/weight_entropy": -(w * terms["log_w"]).sum(-1).mean(),
     }

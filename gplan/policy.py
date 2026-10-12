@@ -3,18 +3,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Independent, Normal
+from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
 
 class GPlaner(nn.Module):
-    """Predicts a diagonal Gaussian over the next world-model action.
+    """Predicts a mixture of ``n_components`` diagonal Gaussians over the next world-model action
+    (``n_components=1``, the default, is a single diagonal Gaussian).
 
     The network is conditioned on the start state, the goal state and the whole
     fixed-length action buffer of size ``horizon`` (= n_steps * action_dim, laid
     out step-major so ``buffer.view(B, n_steps, action_dim)`` is the plan the world
     model consumes). Slots of the buffer that have not been filled yet are zero.
-    It outputs the mean and variance of the ``action_dim`` values of the next
-    unfilled step, so the plan is sampled in ``n_steps`` autoregressive steps
+    It outputs the mixture weights, means and stds over the ``action_dim`` values of
+    the next unfilled step, so the plan is sampled in ``n_steps`` autoregressive steps
     rather than ``horizon`` scalar ones. ``action_dim=1`` recovers the scalar case.
 
     The std is parametrized through a tanh squash of the head output,
@@ -26,7 +27,7 @@ class GPlaner(nn.Module):
     """
 
     def __init__(self, state_dim=2, horizon=8, hidden_size=64, n_layers=2,
-                 log_std_min=-5.0, log_std_max=2.0, action_dim=1) -> None:
+                 log_std_min=-5.0, log_std_max=2.0, action_dim=1, n_components=1) -> None:
         super().__init__()
         assert horizon % action_dim == 0, f"horizon {horizon} must be a multiple of action_dim {action_dim}"
         self.horizon = horizon
@@ -34,11 +35,15 @@ class GPlaner(nn.Module):
         self.n_steps = horizon // action_dim
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
+        self.n_components = n_components
 
         width = 3 * hidden_size
         self.in_proj = nn.Sequential(nn.Linear(2 * state_dim + horizon, width), nn.GELU())
         self.backbone = nn.ModuleList([nn.Linear(width, width) for _ in range(n_layers)])
-        self.out_proj = nn.Linear(width, 2 * action_dim)
+        # means and raw stds of every component, plus K mixture logits if K > 1 (K = 1 keeps the
+        # plain Gaussian layout, so older checkpoints load unchanged)
+        n_out = 2 * action_dim if n_components == 1 else n_components * (2 * action_dim + 1)
+        self.out_proj = nn.Linear(width, n_out)
         # log-partition function log Z(start, goal); the 64 outputs are summed into one scalar
         self.Z = nn.Sequential(nn.Linear(2 * state_dim, state_dim), nn.ReLU(), nn.Linear(state_dim, 64))
 
@@ -58,16 +63,20 @@ class GPlaner(nn.Module):
             actions:     (B, horizon) action buffer, zeros in unfilled slots.
 
         Returns:
-            mean, var: diagonal Gaussian parameters of the next step, each (B, action_dim).
-                       var = exp(2 * log_std) with log_std tanh-bounded, so it is
-                       always strictly positive and finite.
+            log_weights: (B, K) normalized mixture log-weights (0 when K = 1).
+            means, stds: (B, K, action_dim) component parameters of the next step;
+                         std = exp(log_std) with log_std tanh-bounded, so it is
+                         always strictly positive and finite.
         """
         h_in = self.in_proj(torch.cat([start_state, goal_state, actions], dim=-1))
         h = h_in
         for layer in self.backbone:
             h = F.gelu(layer(h)) + h_in  # every layer is skip-connected to the input projection
-        mean, raw_std = self.out_proj(h).chunk(2, -1)
-        return mean, torch.exp(2.0 * self.squash_log_std(raw_std))
+        out = self.out_proj(h)
+        B, K, A = out.shape[0], self.n_components, self.action_dim
+        means, raw_std = out[:, :K * A].view(B, K, A), out[:, K * A:2 * K * A].view(B, K, A)
+        logits = out[:, 2 * K * A:] if K > 1 else out.new_zeros(B, 1)
+        return logits.log_softmax(-1), means, torch.exp(self.squash_log_std(raw_std))
 
 
 class Sampler:
@@ -75,7 +84,7 @@ class Sampler:
 
     The buffer has shape (B, horizon) = (B, n_steps * action_dim). At step ``t``
     the model sees the buffer with steps ``0..t-1`` (slots ``0..t*action_dim-1``)
-    filled and everything after zeroed, predicts a diagonal Gaussian over the
+    filled and everything after zeroed, predicts a Gaussian mixture over the
     ``action_dim`` values of step ``t``, and the sample is written to those slots.
 
     ``reference_var`` is the variance s^2 of the N(0, s^2 I) reference measure
@@ -98,8 +107,8 @@ class Sampler:
         """Slice of the buffer holding step ``step``."""
         return slice(step * self.action_dim, (step + 1) * self.action_dim)
 
-    def action_dist(self, start_state, goal_state, actions, step) -> Independent:
-        """Diagonal Gaussian over the action at step ``step``, given the steps before it.
+    def action_dist(self, start_state, goal_state, actions, step) -> MixtureSameFamily:
+        """Mixture of diagonal Gaussians over the action at step ``step``, given the steps before it.
 
         Slots at index ``>= step * action_dim`` are zeroed before being fed to the
         model, so it never sees the action it is asked to predict or anything after.
@@ -107,8 +116,16 @@ class Sampler:
         (B, action_dim) and ``log_prob(x)`` is (B,).
         """
         visible = torch.arange(actions.shape[1], device=actions.device) < step * self.action_dim
-        mean, var = self.model(start_state, goal_state, actions * visible.to(actions.dtype))
-        return Independent(Normal(mean, var.sqrt()), 1)
+        log_w, means, stds = self.model(start_state, goal_state, actions * visible.to(actions.dtype))
+        return MixtureSameFamily(Categorical(logits=log_w), Independent(Normal(means, stds), 1))
+
+    @staticmethod
+    def mode_action(dist):
+        """Mean of the most likely component, (B, action_dim): the deterministic action.
+        (The mixture's own mean can fall between modes; with one component they coincide.)"""
+        best = dist.mixture_distribution.logits.argmax(-1)
+        means = dist.component_distribution.base_dist.loc
+        return means[torch.arange(means.shape[0], device=means.device), best]
 
     @torch.no_grad()
     def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample"):
@@ -120,8 +137,8 @@ class Sampler:
             actions:     (B, horizon) buffer whose first ``n_given`` steps are
                          already filled. Defaults to an all-zero buffer.
             n_given:     number of leading steps to keep as they are.
-            mode:        "sample" draws from the policy; "mean" writes the
-                         predicted mean at every step (deterministic plan).
+            mode:        "sample" draws from the policy; "mean" writes the mean of
+                         the most likely component at every step (deterministic plan).
 
         Returns:
             (B, horizon) buffer with every slot filled. The input is not modified.
@@ -132,13 +149,13 @@ class Sampler:
         actions = actions.clone()
         for t in range(n_given, self.n_steps):
             dist = self.action_dist(start_state, goal_state, actions, step=t)
-            actions[:, self._slots(t)] = dist.sample() if mode == "sample" else dist.mean
+            actions[:, self._slots(t)] = dist.sample() if mode == "sample" else self.mode_action(dist)
         return actions
 
     def log_prob(self, start_state, goal_state, actions, n_given=0):
         """Log-probability of each step of ``actions`` under the current model.
 
-        Uses teacher forcing: step ``t`` is scored against the Gaussian the model
+        Uses teacher forcing: step ``t`` is scored against the distribution the model
         predicts from the true steps ``0..t-1`` (later steps masked), exactly as
         the buffer looked when step ``t`` was sampled in ``rollout``. Works for any
         buffer, not only the model's own samples. Differentiable w.r.t. the model.
@@ -171,8 +188,9 @@ def save_planner(path, model, model_kwargs, train_args=None):
 
 
 def planner_kwargs_from_state_dict(sd):
-    """Recover `GPlaner(...)` constructor kwargs from a bare state_dict.
-    Bounds of the log-std squash are not in the state_dict and are assumed to be the defaults."""
+    """Recover `GPlaner(...)` constructor kwargs from a bare state_dict (legacy checkpoints).
+    Bounds of the log-std squash are not in the state_dict and are assumed to be the defaults,
+    and the policy is assumed to be a single Gaussian (n_components=1)."""
     width, in_dim = sd["in_proj.0.weight"].shape            # (3 * hidden, 2 * state_dim + horizon)
     state_dim = sd["Z.0.weight"].shape[1] // 2               # Z: Linear(2 * state_dim, state_dim)
     action_dim = sd["out_proj.weight"].shape[0] // 2         # (2 * action_dim, 3 * hidden)

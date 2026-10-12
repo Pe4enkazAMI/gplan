@@ -5,11 +5,11 @@ from conftest import A, B, D, T
 from gplan.policy import GPlaner, Sampler, load_planner, save_planner
 
 
-@pytest.mark.parametrize("action_dim", [1, A])
-def test_rollout_and_log_prob_shapes(action_dim):
-    """Both the scalar (action_dim=1) and the blocked layout produce a full buffer and per-step log-probs."""
+@pytest.mark.parametrize("action_dim, n_components", [(1, 1), (A, 1), (A, 3)])
+def test_rollout_and_log_prob_shapes(action_dim, n_components):
+    """Scalar (action_dim=1) and blocked layouts, Gaussian or mixture: a full buffer and per-step log-probs."""
     torch.manual_seed(0)
-    s = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=action_dim))
+    s = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=action_dim, n_components=n_components))
     z_start, z_goal = torch.randn(B, D), torch.randn(B, D)
     actions = s.rollout(z_start, z_goal)
     assert actions.shape == (B, T * A)
@@ -32,9 +32,9 @@ def test_log_z_keeps_batch_dim_for_single_condition():
     assert model.log_Z(torch.randn(1, D), torch.randn(1, D)).shape == (1,)
 
 
-@pytest.mark.parametrize("bare", [False, True])
-def test_checkpoint_roundtrip(tmp_path, bare):
-    kwargs = dict(state_dim=D, horizon=T * A, hidden_size=8, n_layers=3, action_dim=A)
+@pytest.mark.parametrize("bare, n_components", [(False, 1), (False, 3), (True, 1)])
+def test_checkpoint_roundtrip(tmp_path, bare, n_components):
+    kwargs = dict(state_dim=D, horizon=T * A, hidden_size=8, n_layers=3, action_dim=A, n_components=n_components)
     model = GPlaner(**kwargs)
     path = tmp_path / "planner.pt"
     if bare:

@@ -5,6 +5,7 @@ the .pt is what scripts/evaluate.py loads.
 
     python scripts/train.py --beta 120 --wandb-name tb-beta120 --out outputs/tb-beta120
     python scripts/train.py --loss vargrad --n-samples 8
+    python scripts/train.py --n-components 4             # EXP: mixture of 4 Gaussians per plan step
 
 See gplan_jax/losses.py for the target distribution and the two losses.
 """
@@ -32,6 +33,8 @@ def parse_args():
     p.add_argument("--goal-offset", type=int, default=25, help="goal = start + this many dataset steps")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
+    p.add_argument("--n-components", type=int, default=1,
+                   help="EXP mixture policy: Gaussians per plan step (1 = a single diagonal Gaussian)")
     p.add_argument("--loss", default="tb", choices=["vargrad", "tb"])
     p.add_argument("--n-samples", type=int, default=8, help="plans sampled per (start, goal); vargrad needs >= 2")
     p.add_argument("--beta", type=float, default=1.0,
@@ -65,7 +68,8 @@ def main():
     pairs = LatentPairs(args.latents or STABLEWM_HOME / f"{args.dataset}_latents", args.goal_offset,
                         expected_ckpt=args.ckpt)
     d = pairs.embed_dim
-    model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim)
+    model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
+                        n_components=args.n_components)
     model = GPlaner(**model_kwargs, key=jax.random.key(args.seed))
     cfg = TrainConfig(loss_type=args.loss, n_samples=args.n_samples, action_dim=args.action_dim,
                       reference_var=args.ref_var, grad_clip=args.grad_clip)

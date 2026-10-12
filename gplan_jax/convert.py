@@ -119,7 +119,8 @@ def gplaner_from_torch(torch_model, key=_KEY) -> GPlaner:
     state_dim = torch_model.Z[0].in_features // 2
     model = GPlaner(state_dim=state_dim, horizon=torch_model.horizon, hidden_size=width // 3,
                     n_layers=len(torch_model.backbone), log_std_min=torch_model.log_std_min,
-                    log_std_max=torch_model.log_std_max, action_dim=torch_model.action_dim, key=key)
+                    log_std_max=torch_model.log_std_max, action_dim=torch_model.action_dim,
+                    n_components=torch_model.n_components, key=key)
     return eqx.tree_at(
         lambda m: (m.in_proj, m.backbone, m.out_proj, m.Z),
         model,

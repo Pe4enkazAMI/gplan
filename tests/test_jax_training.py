@@ -34,10 +34,10 @@ def torch_xi(sampler, z_start, z_goal, plans, cost):
     return sampler.log_prob(z_start, z_goal, plans).sum(-1) + BETA * cost - sampler.reference_log_prob(plans)
 
 
-@pytest.fixture
-def setup():
+@pytest.fixture(params=[1, 3], ids=["gaussian", "mixture"])
+def setup(request):
     torch.manual_seed(0)
-    torch_model = TorchGPlaner(state_dim=D, horizon=T * A, hidden_size=8, action_dim=A)
+    torch_model = TorchGPlaner(state_dim=D, horizon=T * A, hidden_size=8, action_dim=A, n_components=request.param)
     g = torch.Generator().manual_seed(1)
     z_start, z_goal = torch.randn(B, D, generator=g), torch.randn(B, D, generator=g)
     plans, cost = torch.randn(B, T * A, generator=g), 10 * torch.rand(B, generator=g)
@@ -101,7 +101,7 @@ def test_train_converges_to_analytic_solution(loss_type):
     zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
     keys = jax.random.split(jax.random.key(1), len(zs))
     plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(keys, zs, zg)
-    _, means, stds = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
+    _, _, means, stds = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
     assert float(jnp.abs(means).max()) < 0.1
     # The optimum is a statement about the distribution, so check the variance averaged over all
     # conditions tightly (dropping the prior would give 0.25, i.e. 0.05 off) and each condition loosely:
