@@ -39,6 +39,16 @@ def adapt_step_size(step_size, accept_rate, target):
     return step_size * math.exp(accept_rate - target) if target > 0 else step_size
 
 
+# One seed, independent random streams: weight initialization and everything sampled in training
+# (plans, MALA). Deriving both from the same raw key would correlate them.
+INIT_STREAM, TRAIN_STREAM = 0, 1
+
+
+def init_key(seed):
+    """Key for the model's initial weights (`GPlaner(..., key=init_key(seed))`)."""
+    return jax.random.fold_in(jax.random.key(seed), INIT_STREAM)
+
+
 def linear_beta_schedule(beta_end, beta_start=0.0, warmup_steps=0):
     """`step -> beta`, linear from `beta_start` to `beta_end` over `warmup_steps`, then constant."""
     if warmup_steps <= 0:
@@ -122,6 +132,7 @@ def make_train_step(optimizer, cfg: TrainConfig):
 def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None, seed=0, log_every=10):
     """One optimizer step per (z_start, z_goal) batch. Returns (trained model, list of losses).
 
+    `seed` drives the training samples (stream TRAIN_STREAM; initialize the model with `init_key(seed)`).
     `beta` is a float or a callable `step -> beta`. Every step is logged to wandb when a run is
     active; a console summary is printed every `log_every` steps. Step 0 includes compilation time.
     With local search on (cfg.ls_steps > 0) the loss and its stats cover on-policy and MALA plans
@@ -131,7 +142,7 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
     optimizer = make_optimizer(model, lr, lr_z, cfg.grad_clip)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     train_step = make_train_step(optimizer, cfg)
-    key = jax.random.key(seed)
+    key = jax.random.fold_in(jax.random.key(seed), TRAIN_STREAM)
     ls_step_size = cfg.ls_step_size
 
     losses = []

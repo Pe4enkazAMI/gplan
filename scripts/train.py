@@ -23,7 +23,7 @@ from gplan.jax import checkpoint
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
 from gplan.jax.policy import GPlaner
-from gplan.jax.train import linear_beta_schedule, train, TrainConfig
+from gplan.jax.train import init_key, linear_beta_schedule, train, TrainConfig
 
 
 def parse_args():
@@ -85,7 +85,7 @@ def main():
     d = pairs.embed_dim
     model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
                         n_components=args.n_components)
-    model = GPlaner(**model_kwargs, key=jax.random.key(args.seed))
+    model = GPlaner(**model_kwargs, key=init_key(args.seed))
     cfg = TrainConfig(loss_type=args.loss, n_samples=args.n_samples, action_dim=args.action_dim,
                       reference_var=args.ref_var, grad_clip=args.grad_clip, ls_steps=args.ls_steps,
                       ls_every=args.ls_every, ls_start=args.ls_start, ls_step_size=args.ls_step_size,

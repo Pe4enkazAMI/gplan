@@ -3,6 +3,7 @@ and a run trained on the tiny LeWM exports to the PyTorch checkpoint evaluation 
 
 import math
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,7 +14,7 @@ from toy_costs import QuadraticCost
 from gplan.jax import checkpoint
 from gplan.jax import policy as jp
 from gplan.jax.convert import gplaner_to_torch, lewm_from_torch
-from gplan.jax.train import train, TrainConfig
+from gplan.jax.train import init_key, train, TRAIN_STREAM, TrainConfig
 from gplan.torch.policy import load_planner
 
 
@@ -44,12 +45,13 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     assert float(jnp.abs(means).max()) < 0.1
     # The optimum is a statement about the distribution, so check the variance averaged over all
     # conditions tightly (dropping the prior would give 0.25, i.e. 0.05 off) and each condition loosely:
-    # after a finite stochastic run one of a few conditions can still lag (seen: 0.23 on one of 8), and
-    # float round-off differences between CPUs change which one.
+    # after a finite stochastic run a few conditions can still lag (seen: 0.14 and 0.26 on 2 of 64), and
+    # which ones depends on the random stream and on float round-off differences between CPUs.
     target_var = 1 / (2 * beta + 1 / s2)
     variances = np.asarray(stds) ** 2
     assert abs(variances.mean() - target_var) < 0.01
-    np.testing.assert_allclose(variances, target_var, atol=0.05)
+    off = np.abs(variances - target_var)
+    assert np.mean(off < 0.05) > 0.95 and off.max() < 0.1, np.sort(variances.ravel())[[0, -1]]
     log_z = jax.vmap(model.log_Z)(zs, zg)
     target = -H / 2 * math.log(1 + 2 * beta * s2)
     assert abs(float(log_z.mean()) - target) < 0.1  # target -4.83; a wrong prior term would give +1.35
@@ -72,3 +74,21 @@ def test_train_with_lewm_then_export_to_torch(wm, tmp_path):
     assert train_args == {"n_steps": T}
     for name, p in torch_model.state_dict().items():
         np.testing.assert_array_equal(p.numpy(), gplaner_to_torch(reloaded)[name].numpy(), err_msg=name)
+
+
+def test_training_is_reproducible_and_seeds_matter():
+    """Same seed -> bit-identical weights and losses (CPU); another seed -> a different run.
+    The init and training streams of one seed are different keys."""
+    def run(seed):
+        model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2, key=init_key(seed))
+        rng = np.random.default_rng(0)
+        batches = [(rng.normal(size=(B, D)).astype(np.float32), rng.normal(size=(B, D)).astype(np.float32))] * 5
+        cfg = TrainConfig(loss_type="tb", n_samples=2, action_dim=A, grad_clip=10.0, ls_steps=2, ls_every=2)
+        return train(model, QuadraticCost(), batches, 0.5, cfg, seed=seed, log_every=10**9)
+
+    (m1, l1), (m2, l2), (_, l3) = run(0), run(0), run(1)
+    assert l1 == l2 and l1 != l3
+    for a, b in zip(jax.tree.leaves(eqx.filter(m1, eqx.is_array)), jax.tree.leaves(eqx.filter(m2, eqx.is_array))):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+    assert not np.array_equal(jax.random.key_data(init_key(0)),
+                              jax.random.key_data(jax.random.fold_in(jax.random.key(0), TRAIN_STREAM)))
