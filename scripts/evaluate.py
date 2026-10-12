@@ -53,8 +53,9 @@ from gplan.torch.policy import load_planner
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--policy", nargs="+", choices=["gflow", "gflow-refine", "cem", "random"],
-                   default=["gflow", "cem"], help="policies to evaluate on the same episodes")
+    p.add_argument("--policy", nargs="+", action="extend", choices=["gflow", "gflow-refine", "cem", "random"],
+                   help="policies to evaluate on the same episodes, in this order (default: gflow cem); "
+                        "repeating the flag adds to the list")
     p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
     p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
                    help="[gflow] execute the cheapest of --gflow-samples plans, a single sample, or the mean plan")
@@ -90,6 +91,7 @@ def parse_args():
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None)
     args = p.parse_args()
+    args.policy = list(dict.fromkeys(args.policy or ["gflow", "cem"]))  # keep the order, drop repeats
     task = TASKS[args.task]
     args.wm = args.wm or task.wm
     args.dataset = args.dataset or task.dataset

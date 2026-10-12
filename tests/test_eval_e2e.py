@@ -21,6 +21,7 @@ swm = pytest.importorskip("stable_worldmodel")
 from gplan.torch.policy import GPlaner, save_planner  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.slow
 EMBED, ACTION_DIM = 16, 10  # 10 = frameskip 5 x 2-d env actions
 
 

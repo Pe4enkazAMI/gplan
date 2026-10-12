@@ -65,3 +65,22 @@ def test_vargrad_loss_and_grads_match_torch(setup):
     (loss, _), grads = eqx.filter_value_and_grad(vargrad_loss, has_aux=True)(jax_model, *jargs, BETA, REF_VAR, K)
     np.testing.assert_allclose(float(loss), ref.item(), rtol=1e-5)
     assert_grads_match(grads, torch_model)
+
+
+def test_policy_stats_for_gaussian_and_mixture(setup):
+    """With one component the entropy statistic is the Gaussian entropy and the weight is 1;
+    a mixture reports weights below 1 and a lower-bound entropy."""
+    torch_model, jax_model, _, jargs = setup
+    _, stats = tb_loss(jax_model, *jargs, BETA, REF_VAR)
+    sampler = Sampler(torch_model)
+    zs, zg, plans = (torch.from_numpy(np.asarray(x)) for x in jargs[:3])
+    with torch.no_grad():
+        dists = [sampler.action_dist(zs, zg, plans, t) for t in range(sampler.n_steps)]
+        entropy = sum(d.entropy_lower_bound() for d in dists).mean().item()
+    np.testing.assert_allclose(float(stats["policy/entropy"]), entropy, rtol=1e-5)
+    if torch_model.n_components == 1:
+        assert float(stats["policy/weight_max"]) == 1.0 and float(stats["policy/weight_entropy"]) == 0.0
+        gauss = sum(0.5 * torch.log(2 * torch.pi * torch.e * d.stds[:, 0] ** 2).sum(-1) for d in dists).mean()
+        np.testing.assert_allclose(float(stats["policy/entropy"]), gauss.item(), rtol=1e-5)
+    else:
+        assert 1 / torch_model.n_components <= float(stats["policy/weight_max"]) < 1.0

@@ -1,4 +1,4 @@
-"""Test-time refinement in the PyTorch solver: same procedure as the JAX probe, and it lowers the cost."""
+"""Solvers: GFlow best-of-N selection, test-time refinement (same procedure as the JAX probe), cost logging."""
 
 from types import SimpleNamespace
 
@@ -7,9 +7,9 @@ import pytest
 import torch
 from conftest import A, B, D, IMG, make_wm, T
 
-from gplan.torch.lewm import lewm_cost
+from gplan.torch.lewm import encode, lewm_cost
 from gplan.torch.policy import GPlaner, Sampler
-from gplan.torch.solvers import GFlowSolver, refine_plans
+from gplan.torch.solvers import CostLoggingSolver, GFlowSolver, refine_plans
 
 
 def lewm_with_action_effect():
@@ -84,3 +84,59 @@ def test_gflow_solver_owns_its_random_stream():
         torch.testing.assert_close(a, b)
     assert not torch.equal(first[0], first[1])  # the stream advances between replans
     assert not torch.equal(first[0], plan(seed=4, disturb=0)[0])
+
+
+def configured(solver, n_envs=B):
+    solver.configure(action_space=SimpleNamespace(shape=(n_envs, A)), n_envs=n_envs,
+                     config=SimpleNamespace(horizon=T, action_block=1))
+    return solver
+
+
+def frames(seed=0):
+    g = torch.Generator().manual_seed(seed)
+    return {"pixels": torch.randn(B, 1, 3, IMG, IMG, generator=g), "goal": torch.randn(B, 1, 3, IMG, IMG, generator=g)}
+
+
+def test_min_cost_executes_the_cheapest_of_its_samples():
+    """Redo the solver's draw by hand (same seed, same generator) and score every sample."""
+    wm, info, N = lewm_with_action_effect(), frames(), 6
+    torch.manual_seed(0)
+    sampler = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
+    out = configured(GFlowSolver(wm, sampler, num_samples=N, select="min-cost", seed=11)).solve(info)
+
+    zs = encode(wm, info["pixels"][:, -1]).repeat_interleave(N, 0)
+    zg = encode(wm, info["goal"][:, -1]).repeat_interleave(N, 0)
+    plans = sampler.rollout(zs, zg, generator=torch.Generator().manual_seed(11)).view(B, N, T, A)
+    costs = lewm_cost(wm, zs, zg, plans.view(B * N, T, A)).view(B, N)
+    torch.testing.assert_close(out["actions"], plans[torch.arange(B), costs.argmin(1)])
+    np.testing.assert_allclose(out["costs"], costs.min(1).values.numpy(), rtol=1e-6)
+
+
+def test_sample_and_mean_execute_a_single_unscored_plan():
+    wm, info = lewm_with_action_effect(), frames()
+    torch.manual_seed(0)
+    sampler = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
+    mean = configured(GFlowSolver(wm, sampler, num_samples=64, select="mean"))
+    assert mean.num_samples == 1 and mean.plans_per_replan == 0 == mean.backward_per_replan
+    zs, zg = encode(wm, info["pixels"][:, -1]), encode(wm, info["goal"][:, -1])
+    torch.testing.assert_close(mean.solve(info)["actions"], sampler.rollout(zs, zg, mode="mean").view(B, T, A))
+    torch.testing.assert_close(mean.solve(info)["actions"], mean.solve(info)["actions"])  # deterministic
+    single = configured(GFlowSolver(wm, sampler, num_samples=64, select="sample"))
+    assert single.num_samples == 1 and single.plans_per_replan == 0
+
+
+def test_cost_logging_records_what_was_executed():
+    wm = lewm_with_action_effect()
+    torch.manual_seed(0)
+    inner = GFlowSolver(wm, Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A)), num_samples=4)
+    logged = configured(CostLoggingSolver(inner, wm))
+    outs = [logged.solve(frames(seed)) for seed in (0, 1)]  # two replanning steps
+    for out, cost, absmax, seed in zip(outs, logged.costs, logged.action_absmax, (0, 1)):
+        info = frames(seed)
+        ref = lewm_cost(wm, encode(wm, info["pixels"][:, -1]), encode(wm, info["goal"][:, -1]), out["actions"])
+        np.testing.assert_allclose(cost, ref.numpy(), rtol=1e-6)
+        np.testing.assert_allclose(absmax, out["actions"].abs().amax(dim=(1, 2)).numpy())
+    s = logged.summary()
+    assert s["replans"] == 2 and s["plan_cost_first"] == s["plan_cost_replan0"]
+    assert np.isclose(s["plan_cost"], np.mean([s["plan_cost_replan0"], s["plan_cost_replan1"]]))
+    assert s["action_absmax_max"] == max(a.max() for a in logged.action_absmax)

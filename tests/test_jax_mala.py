@@ -38,6 +38,7 @@ def test_step_size_adaptation():
     assert adapt_step_size(0.1, 0.9, 0.0) == 0.1  # target 0 keeps the step size fixed
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("seed", [0, 1, 2, 3])
 def test_mixture_with_local_search_gives_both_modes_their_mass(seed):
     """Double well, 2-component mixture, TB with MALA plans: about half of the samples on each side.

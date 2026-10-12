@@ -41,6 +41,7 @@ packages = ["gplan", "gplan.torch", "gplan.jax"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["slow: end-to-end runs and training to convergence (minutes); skip with -m 'not slow'"]
 
 [tool.ruff]
 line-length = 120

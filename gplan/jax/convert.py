@@ -69,7 +69,8 @@ def _block(b) -> jl.ConditionalBlock:
 def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
     """Convert the planning part of a trained PyTorch LeWM (`jepa.JEPA`, eval mode) to Equinox.
 
-    `history_size` defaults to the predictor's context length (its number of position embeddings, 3 for LeWM)."""
+    `history_size` defaults to the predictor's context length (its number of position embeddings, 3 for LeWM),
+    as `gplan.torch.lewm.history_length` does on the PyTorch side."""
     enc, pred, proj = wm.action_encoder, wm.predictor, wm.pred_proj
     conv = enc.patch_embed  # Conv1d(kernel_size=1) == Linear on each step
     patch = eqx.nn.Linear(conv.in_channels, conv.out_channels, key=_key())

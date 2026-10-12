@@ -48,7 +48,11 @@ def refine_plans(cost_model, z_start, z_goal, plans, beta, reference_var, steps,
 
 def lewm_action_stats(actions):
     """Per-dimension mean and std of the raw dataset actions, as LeWM's training normalizer computes
-    them (rows with NaN dropped, unbiased std; le-wm/utils.py)."""
+    them (rows with NaN dropped, unbiased std; le-wm/utils.py).
+
+    Evaluation normalizes with ddof=0 instead (`gplan.torch.evaluation.Standardizer`, as le-wm/eval.py's
+    StandardScaler does). The stds differ by a factor sqrt(N / (N - 1)), i.e. ~1 / (2N) relative:
+    negligible for datasets of thousands of frames, so plans mean the same thing on both sides."""
     a = actions[~np.isnan(actions).any(axis=1)]
     return a.mean(0), a.std(0, ddof=1)
 

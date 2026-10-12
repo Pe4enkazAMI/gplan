@@ -45,6 +45,11 @@ def embed_dim(wm):
     return wm.predictor.pos_embedding.shape[-1]
 
 
+def history_length(wm):
+    """Context length of the predictor (its number of position embeddings; 3 for every LeWM config)."""
+    return wm.predictor.pos_embedding.shape[1]
+
+
 @torch.no_grad()
 def encode(wm, pixels):
     """Frozen LeWM embedding of a batch of frames. pixels: (B, C, H, W) -> (B, D)."""
@@ -52,7 +57,7 @@ def encode(wm, pixels):
 
 
 @torch.no_grad()
-def lewm_cost(wm, z_start, z_goal, actions, history_size=3):
+def lewm_cost(wm, z_start, z_goal, actions, history_size=None):
     """J(A, c): LeWM planning cost of an action plan (no gradient; see `lewm_cost_grad`).
 
     Rolls the frozen predictor forward from z_start through `actions` and returns
@@ -63,14 +68,16 @@ def lewm_cost(wm, z_start, z_goal, actions, history_size=3):
     Args:
         z_start, z_goal: (B, D)
         actions:         (B, T, A) actions in the world model's (z-scored) action space.
+        history_size:    predictor context (default: the checkpoint's, `history_length(wm)`).
     Returns:
         (B,) cost per plan.
     """
     return lewm_cost_grad(wm, z_start, z_goal, actions, history_size)
 
 
-def lewm_cost_grad(wm, z_start, z_goal, actions, history_size=3):
+def lewm_cost_grad(wm, z_start, z_goal, actions, history_size=None):
     """`lewm_cost` with autograd left on, so J can be differentiated w.r.t. the actions."""
+    history_size = history_size or history_length(wm)
     emb = z_start.unsqueeze(1)  # (B, 1, D)
     for t in range(actions.shape[1]):
         act_emb = wm.action_encoder(actions[:, : t + 1])
