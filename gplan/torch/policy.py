@@ -3,7 +3,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
+
+from gplan.torch.distributions import DiagGaussianMixture, reference_log_prob
 
 
 class GPlaner(nn.Module):
@@ -63,10 +64,9 @@ class GPlaner(nn.Module):
             actions:     (B, horizon) action buffer, zeros in unfilled slots.
 
         Returns:
-            log_weights: (B, K) normalized mixture log-weights (0 when K = 1).
-            means, stds: (B, K, action_dim) component parameters of the next step;
-                         std = exp(log_std) with log_std tanh-bounded, so it is
-                         always strictly positive and finite.
+            DiagGaussianMixture over the next step: log-weights (B, K) (0 when K = 1),
+            means and stds (B, K, action_dim); std = exp(log_std) with log_std
+            tanh-bounded, so it is always strictly positive and finite.
         """
         h_in = self.in_proj(torch.cat([start_state, goal_state, actions], dim=-1))
         h = h_in
@@ -76,7 +76,7 @@ class GPlaner(nn.Module):
         B, K, A = out.shape[0], self.n_components, self.action_dim
         means, raw_std = out[:, :K * A].view(B, K, A), out[:, K * A:2 * K * A].view(B, K, A)
         logits = out[:, 2 * K * A:] if K > 1 else out.new_zeros(B, 1)
-        return logits.log_softmax(-1), means, torch.exp(self.squash_log_std(raw_std))
+        return DiagGaussianMixture.from_logits(logits, means, torch.exp(self.squash_log_std(raw_std)))
 
 
 class Sampler:
@@ -107,7 +107,7 @@ class Sampler:
         """Slice of the buffer holding step ``step``."""
         return slice(step * self.action_dim, (step + 1) * self.action_dim)
 
-    def action_dist(self, start_state, goal_state, actions, step) -> MixtureSameFamily:
+    def action_dist(self, start_state, goal_state, actions, step) -> DiagGaussianMixture:
         """Mixture of diagonal Gaussians over the action at step ``step``, given the steps before it.
 
         Slots at index ``>= step * action_dim`` are zeroed before being fed to the
@@ -116,16 +116,7 @@ class Sampler:
         (B, action_dim) and ``log_prob(x)`` is (B,).
         """
         visible = torch.arange(actions.shape[1], device=actions.device) < step * self.action_dim
-        log_w, means, stds = self.model(start_state, goal_state, actions * visible.to(actions.dtype))
-        return MixtureSameFamily(Categorical(logits=log_w), Independent(Normal(means, stds), 1))
-
-    @staticmethod
-    def mode_action(dist):
-        """Mean of the most likely component, (B, action_dim): the deterministic action.
-        (The mixture's own mean can fall between modes; with one component they coincide.)"""
-        best = dist.mixture_distribution.logits.argmax(-1)
-        means = dist.component_distribution.base_dist.loc
-        return means[torch.arange(means.shape[0], device=means.device), best]
+        return self.model(start_state, goal_state, actions * visible.to(actions.dtype))
 
     @torch.no_grad()
     def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample"):
@@ -149,7 +140,7 @@ class Sampler:
         actions = actions.clone()
         for t in range(n_given, self.n_steps):
             dist = self.action_dist(start_state, goal_state, actions, step=t)
-            actions[:, self._slots(t)] = dist.sample() if mode == "sample" else self.mode_action(dist)
+            actions[:, self._slots(t)] = dist.sample() if mode == "sample" else dist.mode()
         return actions
 
     def log_prob(self, start_state, goal_state, actions, n_given=0):
@@ -176,8 +167,7 @@ class Sampler:
 
     def reference_log_prob(self, actions):
         """log N(actions; 0, s^2 I) summed over the buffer. actions: (B, horizon) -> (B,)."""
-        sigma = torch.tensor(self.reference_var, device=actions.device).sqrt()
-        return Normal(torch.zeros_like(actions), sigma).log_prob(actions).sum(dim=-1)
+        return reference_log_prob(actions, self.reference_var)
 
 
 # ----------------------------------------------------------------------------- checkpoints

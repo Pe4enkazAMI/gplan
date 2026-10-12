@@ -39,7 +39,8 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
     keys = jax.random.split(jax.random.key(1), len(zs))
     plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(keys, zs, zg)
-    _, _, means, stds = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
+    _, dists = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
+    means, stds = dists.means, dists.stds
     assert float(jnp.abs(means).max()) < 0.1
     # The optimum is a statement about the distribution, so check the variance averaged over all
     # conditions tightly (dropping the prior would give 0.25, i.e. 0.05 off) and each condition loosely:

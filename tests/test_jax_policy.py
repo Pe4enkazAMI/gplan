@@ -9,6 +9,7 @@ from conftest import A, B, D, T
 
 from gplan.jax import policy as jp
 from gplan.jax.convert import gplaner_from_torch, gplaner_to_torch
+from gplan.jax.distributions import normal_log_prob
 from gplan.torch.policy import GPlaner as TorchGPlaner
 from gplan.torch.policy import Sampler
 
@@ -31,16 +32,12 @@ def test_step_log_probs_match_torch(models):
     with torch.no_grad():
         ref = sampler.log_prob(z_start, z_goal, plans).numpy()
         dists = [sampler.action_dist(z_start, z_goal, plans, t) for t in range(sampler.n_steps)]
-        ref_log_w = torch.stack([d.mixture_distribution.logits for d in dists], 1)          # (B, n, K)
-        ref_means = torch.stack([d.component_distribution.base_dist.loc for d in dists], 1)  # (B, n, K, A)
-        ref_stds = torch.stack([d.component_distribution.base_dist.scale for d in dists], 1)
-
-    log_probs, log_w, means, stds = jax.vmap(lambda s, g_, p: jp.step_log_probs(jax_model, s, g_, p))(
+    log_probs, ours = jax.vmap(lambda s, g_, p: jp.step_log_probs(jax_model, s, g_, p))(
         z_start.numpy(), z_goal.numpy(), plans.numpy())
     np.testing.assert_allclose(np.asarray(log_probs), ref, rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(log_w), ref_log_w.numpy(), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(means), ref_means.numpy(), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(stds), ref_stds.numpy(), rtol=1e-5, atol=1e-6)
+    for field in ("log_weights", "means", "stds"):  # (B, n_steps, K[, A]) on both sides
+        theirs = torch.stack([getattr(d, field) for d in dists], 1).numpy()
+        np.testing.assert_allclose(np.asarray(getattr(ours, field)), theirs, rtol=1e-5, atol=1e-6, err_msg=field)
 
     log_z = jax.vmap(jax_model.log_Z)(z_start.numpy(), z_goal.numpy())
     np.testing.assert_allclose(np.asarray(log_z), torch_model.log_Z(z_start, z_goal).detach().numpy(), rtol=1e-5, atol=1e-5)
@@ -64,21 +61,14 @@ def test_weights_round_trip(models):
         assert torch.equal(sd[k], v), k
 
 
-def test_reference_log_prob_matches_torch():
-    plans = torch.randn(B, T * A)
-    ref = Sampler(TorchGPlaner(state_dim=D, horizon=T * A), reference_var=2.0).reference_log_prob(plans).numpy()
-    ours = jp.reference_log_prob(jnp.asarray(plans.numpy()), 2.0)
-    np.testing.assert_allclose(np.asarray(ours), ref, rtol=1e-6)
-
-
 def test_single_component_is_the_plain_gaussian():
     """n_components=1 scores a step exactly as a diagonal Gaussian (the pre-mixture policy)."""
     model = jp.GPlaner(state_dim=D, horizon=T * A, hidden_size=8, action_dim=A, key=jax.random.key(0))
     zs, zg, plan = (jax.random.normal(k, s) for k, s in zip(jax.random.split(jax.random.key(1), 3), [(D,), (D,), (T * A,)]))
-    log_probs, log_w, means, stds = jp.step_log_probs(model, zs, zg, plan)
-    gauss = jp.normal_log_prob(plan.reshape(T, A), means[:, 0], stds[:, 0]).sum(-1)
+    log_probs, dists = jp.step_log_probs(model, zs, zg, plan)
+    gauss = normal_log_prob(plan.reshape(T, A), dists.means[:, 0], dists.stds[:, 0]).sum(-1)
     np.testing.assert_allclose(np.asarray(log_probs), np.asarray(gauss), rtol=1e-6)
-    assert np.all(np.asarray(log_w) == 0.0)
+    assert np.all(np.asarray(dists.log_weights) == 0.0)
 
 
 def test_mixture_samples_follow_the_weights():

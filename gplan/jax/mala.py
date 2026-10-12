@@ -17,7 +17,7 @@ plans because both losses only need log P_F of a given plan (teacher forcing).
 import jax
 import jax.numpy as jnp
 
-from gplan.jax.policy import reference_log_prob
+from gplan.jax.distributions import normal_log_prob, reference_log_prob
 
 
 def mala(cost_model, key, z_start, z_goal, actions, beta, reference_var, action_dim, steps, step_size):
@@ -35,8 +35,8 @@ def mala(cost_model, key, z_start, z_goal, actions, beta, reference_var, action_
 
     log_target_and_grad = jax.value_and_grad(summed_log_target, has_aux=True)
 
-    def log_q(to, frm, grad_frm):  # log q(to | from), up to a constant that cancels
-        return -jnp.sum((to - frm - step_size * grad_frm) ** 2, axis=-1) / (4 * step_size)
+    def log_q(to, frm, grad_frm):  # log q(to | from) of the Langevin proposal
+        return normal_log_prob(to, frm + step_size * grad_frm, jnp.sqrt(2 * step_size)).sum(-1)
 
     def step(state, key):
         a, lt, cost, grad = state

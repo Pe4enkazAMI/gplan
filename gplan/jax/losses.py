@@ -16,20 +16,20 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from gplan.jax.policy import reference_log_prob, step_log_probs
+from gplan.jax.distributions import reference_log_prob
+from gplan.jax.policy import step_log_probs
 
 
 def plan_terms(model, z_start, z_goal, actions, cost, reference_var):
     """Per-plan quantities; every array has leading dim N = actions.shape[0]."""
-    log_pf_steps, log_w, means, stds = jax.vmap(partial(step_log_probs, model))(z_start, z_goal, actions)
+    log_pf_steps, dists = jax.vmap(partial(step_log_probs, model))(z_start, z_goal, actions)
     return {
         "log_pf": log_pf_steps.sum(-1),                             # (N,)  differentiable
         "log_pf_steps": log_pf_steps,                               # (N, n_steps)
         "log_z": jax.vmap(model.log_Z)(z_start, z_goal),            # (N,)  differentiable
         "cost": cost,                                               # (N,)  constant
         "log_ref": reference_log_prob(actions, reference_var),      # (N,)  constant
-        "log_w": log_w,                                             # (N, n_steps, K) for diagnostics
-        "means": means, "stds": stds,                               # (N, n_steps, K, A) for diagnostics
+        "dists": dists,                                             # step distributions, for diagnostics
     }
 
 
@@ -71,7 +71,7 @@ def plan_stats(terms, residual, beta):
     """Scalar diagnostics shared by both losses (same names as the PyTorch version)."""
     terms = jax.lax.stop_gradient(terms)
     residual = jax.lax.stop_gradient(residual)
-    cost, stds, w = terms["cost"], terms["stds"], jnp.exp(terms["log_w"])
+    cost, dists = terms["cost"], terms["dists"]  # dists: (N, n_steps) mixtures
     std = partial(jnp.std, ddof=1)
     return {
         "tb/residual": residual.mean(),
@@ -89,15 +89,15 @@ def plan_stats(terms, residual, beta):
         "cost/max": cost.max(),
         "cost/beta_cost": (beta * cost).mean(),
         "cost/beta_cost_std": std(beta * cost),
-        # the Gaussians the policy predicted along the plans (teacher forced)
-        "policy/mean_abs": jnp.abs(terms["means"]).mean(),
-        "policy/std": stds.mean(),
-        "policy/std_min": stds.min(),
-        "policy/std_max": stds.max(),
-        # entropy of a plan's Gaussians; for a mixture, sum_k w_k H(component k), a lower bound
-        # on the mixture entropy (equal for one component)
-        "policy/entropy": (w * (0.5 * jnp.log(2 * jnp.pi * jnp.e * stds ** 2)).sum(-1)).sum(axis=(1, 2)).mean(),
+        # the step distributions the policy predicted along the plans (teacher forced)
+        "policy/mean_abs": jnp.abs(dists.means).mean(),
+        "policy/std": dists.stds.mean(),
+        "policy/std_min": dists.stds.min(),
+        "policy/std_max": dists.stds.max(),
+        # entropy of a plan's steps; for a mixture, sum_k w_k H(component k), a lower bound on the
+        # mixture entropy (equal for one component)
+        "policy/entropy": dists.entropy_lower_bound().sum(-1).mean(),
         # mixture weights: weight_max -> 1 means the components collapsed onto one
-        "policy/weight_max": w.max(-1).mean(),
-        "policy/weight_entropy": -(w * terms["log_w"]).sum(-1).mean(),
+        "policy/weight_max": dists.weights.max(-1).mean(),
+        "policy/weight_entropy": -(dists.weights * dists.log_weights).sum(-1).mean(),
     }
