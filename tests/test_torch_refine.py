@@ -44,7 +44,7 @@ def test_refine_solver_lowers_the_cost_of_the_executed_plan():
     for select in ("min-cost", "refine"):
         solver = GFlowSolver(wm, Sampler(planner), num_samples=8, select=select, refine=refine)
         solver.configure(action_space=SimpleNamespace(shape=(B, A)), n_envs=B, config=config)
-        torch.manual_seed(1)  # the same 8 samples per env for both solvers
+        # both solvers draw the same 8 samples per env: same default seed
         out = solver.solve(info)
         assert out["actions"].shape == (B, T, A)
         costs[select] = np.asarray(out["costs"])
@@ -61,3 +61,25 @@ def test_refine_does_not_touch_world_model_weights():
     assert lewm_cost(wm, zs, zg, refined).shape == (B,)
     for k, v in wm.state_dict().items():
         assert torch.equal(v, before[k]), k
+
+
+def test_gflow_solver_owns_its_random_stream():
+    """Same seed -> same plans, whatever happened to torch's global random state in between."""
+    wm = lewm_with_action_effect()
+    torch.manual_seed(0)
+    planner = GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2)
+    config = SimpleNamespace(horizon=T, action_block=1)
+    info = {"pixels": torch.randn(B, 1, 3, IMG, IMG), "goal": torch.randn(B, 1, 3, IMG, IMG)}
+
+    def plan(seed, disturb):
+        solver = GFlowSolver(wm, Sampler(planner), num_samples=8, select="min-cost", seed=seed)
+        solver.configure(action_space=SimpleNamespace(shape=(B, A)), n_envs=B, config=config)
+        torch.manual_seed(disturb)
+        torch.rand(disturb + 1)  # consume the global stream differently each time
+        return [solver.solve(info)["actions"] for _ in range(2)]  # two replans
+
+    first, second = plan(seed=3, disturb=0), plan(seed=3, disturb=5)
+    for a, b in zip(first, second):
+        torch.testing.assert_close(a, b)
+    assert not torch.equal(first[0], first[1])  # the stream advances between replans
+    assert not torch.equal(first[0], plan(seed=4, disturb=0)[0])

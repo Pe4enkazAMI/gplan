@@ -40,9 +40,12 @@ class GFlowSolver:
         "mean":     execute the policy's mean plan (deterministic).
     With "sample"/"mean" the cost of the single plan is still computed, for logging only.
     `refine` = dict(steps, lr, beta, reference_var, objective), used only by "refine".
+
+    Samples come from the solver's own torch.Generator seeded with `seed` (like swm's CEMSolver),
+    so they do not depend on anything else that uses torch's global random state.
     """
 
-    def __init__(self, wm, sampler, num_samples=64, select="min-cost", device="cpu", refine=None):
+    def __init__(self, wm, sampler, num_samples=64, select="min-cost", device="cpu", refine=None, seed=0):
         assert select in ("min-cost", "refine", "sample", "mean"), select
         assert select != "refine" or refine is not None, "select='refine' needs the refine settings"
         self.wm = wm
@@ -51,6 +54,7 @@ class GFlowSolver:
         self.select = select
         self.device = device
         self.refine = refine
+        self.generator = torch.Generator(device=device).manual_seed(seed)
 
     @property
     def plans_per_replan(self):
@@ -96,7 +100,8 @@ class GFlowSolver:
         z_start = z_start.repeat_interleave(N, dim=0)  # (E*N, D)
         z_goal = z_goal.repeat_interleave(N, dim=0)
         mode = "mean" if self.select == "mean" else "sample"
-        plans = self.sampler.rollout(z_start, z_goal, mode=mode).view(E * N, self.horizon, self.action_dim)
+        plans = self.sampler.rollout(z_start, z_goal, mode=mode, generator=self.generator)
+        plans = plans.view(E * N, self.horizon, self.action_dim)
         if self.select == "refine":
             with torch.enable_grad():
                 plans = refine_plans(self.wm, z_start, z_goal, plans, **self.refine)

@@ -119,7 +119,7 @@ class Sampler:
         return self.model(start_state, goal_state, actions * visible.to(actions.dtype))
 
     @torch.no_grad()
-    def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample"):
+    def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample", generator=None):
         """Fill steps ``n_given..n_steps-1`` of the action buffer.
 
         Args:
@@ -130,6 +130,7 @@ class Sampler:
             n_given:     number of leading steps to keep as they are.
             mode:        "sample" draws from the policy; "mean" writes the mean of
                          the most likely component at every step (deterministic plan).
+            generator:   torch.Generator for the draws (default: torch's global one).
 
         Returns:
             (B, horizon) buffer with every slot filled. The input is not modified.
@@ -140,7 +141,7 @@ class Sampler:
         actions = actions.clone()
         for t in range(n_given, self.n_steps):
             dist = self.action_dist(start_state, goal_state, actions, step=t)
-            actions[:, self._slots(t)] = dist.sample() if mode == "sample" else dist.mode()
+            actions[:, self._slots(t)] = dist.sample(generator) if mode == "sample" else dist.mode()
         return actions
 
     def log_prob(self, start_state, goal_state, actions, n_given=0):
