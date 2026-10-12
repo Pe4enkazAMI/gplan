@@ -96,11 +96,11 @@ def build_policy(name, args, wm, process, planner, refine=None):
     if name in ("gflow", "gflow-refine"):
         assert planner is not None, f"--planner is required for the {name} policy"
         select = "refine" if name == "gflow-refine" else args.gflow_select
-        solver = GFlowSolver(wm, Sampler(planner), args.num_samples or 64, select, args.device, refine=refine)
+        solver = GFlowSolver(wm, Sampler(planner), args.gflow_samples, select, args.device, refine=refine)
         plans_per_replan = solver.plans_per_replan
     else:  # LeWM paper planner (le-wm/config/eval/solver/cem.yaml); batch_size=1 is required by JEPA.criterion
         solver = swm.solver.CEMSolver(
-            model=wm, batch_size=1, num_samples=args.num_samples or 300, var_scale=1.0,
+            model=wm, batch_size=1, num_samples=args.cem_samples, var_scale=1.0,
             n_steps=args.cem_steps, topk=args.cem_topk, device=args.device, seed=args.seed,
         )
         plans_per_replan = solver.num_samples * solver.n_steps

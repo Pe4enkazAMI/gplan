@@ -1,6 +1,7 @@
 """Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom or PushT.
 
-    # head-to-head, one wandb run with a comparison table
+    # head-to-head, one wandb run with a comparison table (CEM always uses its paper settings
+    # unless --cem-* says otherwise)
     python scripts/evaluate.py --policy gflow cem --planner outputs/gplaner.pt
     python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 
@@ -16,15 +17,19 @@
 Per policy we log success_rate, wall-clock time, the LeWM cost of the plans that
 were actually executed (recomputed identically for every solver) and the number
 of plans the world model had to score per replanning step, i.e. the planner's
-compute (CEM = num_samples * cem_steps, GFlow best-of-N = num_samples, GFlow
-sample/mean = 0, GFlow refine = num_samples * (refine_steps + 1) forward passes plus
+compute (CEM = cem_samples * cem_steps, GFlow best-of-N = gflow_samples, GFlow
+sample/mean = 0, GFlow refine = gflow_samples * (refine_steps + 1) forward passes plus
 refine_steps backward passes). Protocol details: gplan/torch/evaluation.py.
+
+Each policy has its own settings (--gflow-*, --refine-*, --cem-*), so CEM runs with the
+same configuration whatever GFlow checkpoint or flags are evaluated next to it.
 
 --task picks the env, dataset, LeWM checkpoint and reset keys (gplan.torch.evaluation.TASKS);
 --env / --dataset / --wm override single fields.
 """
 
 import argparse
+import json
 from itertools import combinations
 from pathlib import Path
 
@@ -43,7 +48,7 @@ def parse_args():
                    default=["gflow", "cem"], help="policies to evaluate on the same episodes")
     p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
     p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
-                   help="[gflow] execute the cheapest of --num-samples plans, a single sample, or the mean plan")
+                   help="[gflow] execute the cheapest of --gflow-samples plans, a single sample, or the mean plan")
     p.add_argument("--refine-steps", type=int, default=20, help="[gflow-refine] Adam steps on the actions")
     p.add_argument("--refine-lr", type=float, default=0.05, help="[gflow-refine] Adam step size (z-scored units)")
     p.add_argument("--refine-objective", default="target", choices=["target", "cost"],
@@ -59,14 +64,17 @@ def parse_args():
     p.add_argument("--eval-budget", type=int, default=50)
     p.add_argument("--horizon", type=int, default=5)
     p.add_argument("--action-block", type=int, default=5, help="frameskip")
-    p.add_argument("--num-samples", type=int, default=None,
-                   help="plans sampled per replanning step (default: 64 for gflow, 300 for cem as in the paper)")
+    p.add_argument("--gflow-samples", type=int, default=64,
+                   help="[gflow, gflow-refine] plans sampled from the GPlaner per replanning step")
+    p.add_argument("--cem-samples", type=int, default=300, help="[cem] samples per iteration (LeWM paper: 300)")
     p.add_argument("--cem-steps", type=int, default=30, help="[cem] optimization iterations")
     p.add_argument("--cem-topk", type=int, default=30, help="[cem] elites kept per iteration")
     p.add_argument("--img-size", type=int, default=224)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--video-dir", default=None, help="save rollout videos under <dir>/<policy>/ (off by default)")
+    p.add_argument("--results-json", type=Path, default=None,
+                   help="also write every policy's metrics and per-episode successes to this .json")
     p.add_argument("--wandb-project", default="gplan")
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None)
@@ -91,6 +99,14 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
     action_dim = env_action_dim * args.action_block
     assert planner.horizon == args.horizon * action_dim, (
         f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")
+
+
+def write_results(path, args, rows, successes):
+    """Metrics and per-episode successes of every policy, for scripted comparisons across runs."""
+    out = {"args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+           "policies": {name: {**m, "episode_successes": successes[name].tolist()} for name, m in rows}}
+    Path(path).write_text(json.dumps(out, indent=2))
+    print(f"wrote {path}")
 
 
 def print_comparison(rows, successes, policies, num_eval):
@@ -159,6 +175,8 @@ def main():
         print({k: (round(v, 3) if isinstance(v, float) else v) for k, v in metrics.items()})
 
     print_comparison(rows, successes, args.policy, args.num_eval)
+    if args.results_json:
+        write_results(args.results_json, args, rows, successes)
     wandb.finish()
 
 
