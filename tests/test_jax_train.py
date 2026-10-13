@@ -32,40 +32,39 @@ from gplan.torch.policy import load_planner, Sampler
 @pytest.mark.parametrize("loss_type, ls_steps", [("tb", 0), ("vargrad", 0), ("tb", 5), ("vargrad", 5)],
                          ids=["tb", "vargrad", "tb-mala", "vargrad-mala"])
 def test_train_converges_to_analytic_solution(loss_type, ls_steps):
-    """With J = ||A||^2 and N(0, s^2 I): each action ~ N(0, 1 / (2 beta + 1 / s^2)),
-    log Z = -(H / 2) * log(1 + 2 beta s^2). With MALA plans in the batch (off-policy) the
-    optimum must be the same."""
-    beta, s2, H = 2.0, 1.0, T * A
+    """Training from a random init reaches the closed-form optimum. With J = ||A||^2 and N(0, s^2 I):
+    each action ~ N(0, 1 / (2 beta + 1 / s^2)) = N(0, 0.2), log Z = -(H / 2) log(1 + 2 beta s^2), for
+    every one of the 64 conditions, with and without MALA plans in the batch (off-policy).
+
+    The learning rates decay to 0 (cosine): with a constant rate the last iterate keeps jittering
+    around the optimum (one variance in 384 ended 0.107 away on one machine). Tolerances are ~5x the
+    worst error over 8 seeds x 4 variants (calibration below); the analytic numbers are exact, see
+    tests/test_jax_optimum.py for the objective itself."""
+    beta, s2, H, steps = 2.0, 1.0, T * A, 3000
     K = 1 if loss_type == "tb" else 8
     n_cond = 64 // K
-    model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=jax.random.key(0))  # scalar layout
+    model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=init_key(0))  # scalar layout
     rng = np.random.default_rng(0)
     batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))
     cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0,
                       ls_steps=ls_steps, ls_step_size=0.05)
-
-    # the loss is noisy step to step (on-policy samples), so judge it over the last 100 steps
-    model, losses = train(model, QuadraticCost(), [batch] * 2000, beta, cfg, lr=1e-3, lr_z=1e-2, log_every=10**9)
-    assert np.mean(losses[-100:]) < 0.05 < losses[0]
+    lr, lr_z = (optax.cosine_decay_schedule(peak, steps) for peak in (1e-3, 1e-2))
+    model, losses = train(model, QuadraticCost(), [batch] * steps, beta, cfg, lr=lr, lr_z=lr_z, log_every=10**9)
 
     zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
-    keys = jax.random.split(jax.random.key(1), len(zs))
-    plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(keys, zs, zg)
+    plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(jax.random.split(jax.random.key(1), len(zs)), zs, zg)
     _, dists = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
-    means, stds = dists.means, dists.stds
-    assert float(jnp.abs(means).max()) < 0.1
-    # The optimum is a statement about the distribution, so check the variance averaged over all
-    # conditions tightly (dropping the prior would give 0.25, i.e. 0.05 off) and each condition loosely:
-    # after a finite stochastic run a few conditions can still lag (seen: 0.14 and 0.26 on 2 of 64), and
-    # which ones depends on the random stream and on float round-off differences between CPUs.
-    target_var = 1 / (2 * beta + 1 / s2)
-    variances = np.asarray(stds) ** 2
-    assert abs(variances.mean() - target_var) < 0.01
-    off = np.abs(variances - target_var)
-    assert np.mean(off < 0.05) > 0.95 and off.max() < 0.1, np.sort(variances.ravel())[[0, -1]]
-    log_z = jax.vmap(model.log_Z)(zs, zg)
-    target = -H / 2 * math.log(1 + 2 * beta * s2)
-    assert abs(float(log_z.mean()) - target) < 0.1  # target -4.83; a wrong prior term would give +1.35
+    variances, log_z = np.asarray(dists.stds) ** 2, np.asarray(jax.vmap(model.log_Z)(zs, zg))
+    target_var, target_log_z = 1 / (2 * beta + 1 / s2), -H / 2 * math.log(1 + 2 * beta * s2)  # 0.2, -4.83
+
+    # worst over 8 seeds x 4 variants (calibration): loss 3e-4, every |mean| 0.018, every |var - 0.2|
+    # 0.0095, |mean var - 0.2| 2e-4, every |log Z - target| 0.0016. (Dropping the prior term would give
+    # var 0.25 and log Z +1.35.)
+    assert np.mean(losses[-100:]) < 2e-3 < losses[0]
+    assert np.abs(np.asarray(dists.means)).max() < 0.05
+    assert np.abs(variances - target_var).max() < 0.05
+    assert abs(variances.mean() - target_var) < 2e-3
+    assert np.abs(log_z - target_log_z).max() < 0.01
 
 
 @pytest.mark.parametrize("n_components", [1, 3])

@@ -57,7 +57,10 @@ def linear_beta_schedule(beta_end, beta_start=0.0, warmup_steps=0):
 
 
 def make_optimizer(model, lr, lr_z=None, grad_clip=0.0):
-    """Global-norm clipping, then Adam on the policy and Adam at `lr_z` on the log Z head (`model.Z`)."""
+    """Global-norm clipping, then Adam on the policy and Adam at `lr_z` on the log Z head (`model.Z`).
+
+    `lr` and `lr_z` are floats or optax schedules (`step -> learning rate`, e.g. a decay to 0 so
+    the last iterate stops jittering around the optimum)."""
     params = eqx.filter(model, eqx.is_array)
     labels = jax.tree.map(lambda _: "policy", params)
     labels = eqx.tree_at(lambda m: m.Z, labels, replace=jax.tree.map(lambda _: "z", params.Z))
@@ -66,6 +69,11 @@ def make_optimizer(model, lr, lr_z=None, grad_clip=0.0):
     adam = optax.multi_transform({"policy": optax.adam(lr), "z": optax.adam(lr if lr_z is None else lr_z)},
                                  lambda _: labels)
     return optax.chain(clip, adam)
+
+
+def value_at(lr, step):
+    """A learning rate that is a float or an optax schedule, at `step` (for logging)."""
+    return float(lr(step)) if callable(lr) else lr
 
 
 def norm_stats(model, grads, grad_clip):
@@ -160,8 +168,8 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
             ls_step_size = adapt_step_size(ls_step_size, stats["ls/accept"], cfg.ls_target_accept)
 
         t_now = time.perf_counter()
-        stats.update({"loss/total": losses[-1], "tb/beta": beta_t, "optim/lr": lr,
-                      "optim/lr_z": lr if lr_z is None else lr_z, "time/step_s": t_now - t_prev,
+        stats.update({"loss/total": losses[-1], "tb/beta": beta_t, "optim/lr": value_at(lr, step),
+                      "optim/lr_z": value_at(lr if lr_z is None else lr_z, step), "time/step_s": t_now - t_prev,
                       "time/samples_per_s": len(z_start) * cfg.n_samples / (t_now - t_prev)})
         t_prev = t_now
         if wandb.run is not None:

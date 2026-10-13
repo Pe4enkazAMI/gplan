@@ -158,7 +158,7 @@ python scripts/export_planner.py outputs/pusht
 ## Tests
 
 ```bash
-pytest                    # everything, ~7 min on CPU
+pytest                    # everything, ~8 min on CPU
 pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~1.5 min
 ruff check .              # pyflakes + import order
 ```
@@ -171,8 +171,9 @@ JAX process would reserve 75% of GPU memory, which on the GB10's shared memory f
 process peaks at about 2.6 GB.
 
 JAX code is checked against the PyTorch code on identical weights (cost, policy, losses and
-gradients), the PyTorch probability code against `torch.distributions`, training against
-closed-form optima, and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
+gradients), the PyTorch probability code against `torch.distributions`, the losses against the
+closed-form optimum (exactly 0 there for any plan, `tests/test_jax_optimum.py`), training against
+that optimum from a random init (TB / VarGrad, with and without MALA), and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
 (CEM identical whatever GFlow checkpoint runs next to it, every policy reproducible).
 
 The losses take the plan costs as data, and `step_log_probs` scores any plan, so new plan
