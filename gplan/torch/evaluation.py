@@ -20,7 +20,7 @@ import torch
 
 from gplan.data import episode_column, split_episodes, valid_start_rows
 from gplan.torch.lewm import img_transform
-from gplan.torch.policy import Sampler
+from gplan.torch.policy import PriorSampler, Sampler
 from gplan.torch.solvers import CostLoggingSolver, GFlowSolver
 
 
@@ -123,17 +123,25 @@ def build_policy(name, args, wm, process, planner, refine=None):
     """(policy, cost-logging solver or None, compute per replanning step).
 
     compute = {"plans_per_replan": forward rollouts of the world model,
-               "backward_per_replan": backward passes through it (gflow-refine only)}.
+               "backward_per_replan": backward passes through it (refine policies only)}.
     "gflow" uses --gflow-select; "gflow-refine" is best-of-N after test-time refinement with the
-    `refine` settings (see gplan.torch.solvers.refine_plans)."""
+    `refine` settings (see gplan.torch.solvers.refine_plans). "prior" / "prior-refine" do the same with
+    --prior-samples plans from N(0, --prior-var I) instead of the GPlaner: random shooting, and
+    gradient planning from random starts (the control for gflow-refine)."""
     if name == "random":
         return swm.policy.RandomPolicy(seed=args.seed), None, {"plans_per_replan": 0, "backward_per_replan": 0}
 
-    if name in ("gflow", "gflow-refine"):
-        assert planner is not None, f"--planner is required for the {name} policy"
-        select = "refine" if name == "gflow-refine" else args.gflow_select
-        solver = GFlowSolver(wm, Sampler(planner), args.gflow_samples, select, args.device, refine=refine,
-                             seed=args.seed)
+    if name in ("gflow", "gflow-refine", "prior", "prior-refine"):
+        if name.startswith("gflow"):
+            assert planner is not None, f"--planner is required for the {name} policy"
+            sampler, n_samples, select = Sampler(planner), args.gflow_samples, args.gflow_select
+        else:
+            action_dim = process["action"].mean.shape[0] * args.action_block
+            sampler = PriorSampler(args.horizon * action_dim, action_dim, args.prior_var)
+            sampler, n_samples, select = sampler, args.prior_samples, "min-cost"
+        if name.endswith("-refine"):
+            select = "refine"
+        solver = GFlowSolver(wm, sampler, n_samples, select, args.device, refine=refine, seed=args.seed)
         compute = {"plans_per_replan": solver.plans_per_replan, "backward_per_replan": solver.backward_per_replan}
     else:  # LeWM paper planner (le-wm/config/eval/solver/cem.yaml); batch_size=1 is required by JEPA.criterion
         solver = swm.solver.CEMSolver(

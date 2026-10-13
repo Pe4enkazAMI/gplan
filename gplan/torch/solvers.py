@@ -29,10 +29,11 @@ def refine_plans(wm, z_start, z_goal, plans, steps, lr, beta, reference_var, obj
 
 
 class GFlowSolver:
-    """`stable_worldmodel` Solver that plans with the GFlowNet sampler.
+    """`stable_worldmodel` Solver that plans with the GFlowNet sampler (or any object with the
+    `Sampler` interface, e.g. `PriorSampler` for random shooting / gradient planning baselines).
 
     For every env: encode start/goal with the frozen LeWM, sample `num_samples`
-    action plans from the GPlaner and pick one according to `select`:
+    action plans from the sampler and pick one according to `select`:
         "min-cost": score all plans with the LeWM cost and execute the cheapest (best-of-N);
         "refine":   refine all plans with `refine["steps"]` Adam steps through LeWM, then
                     execute the cheapest (a test-time search diagnostic, not the amortized planner);
@@ -73,12 +74,12 @@ class GFlowSolver:
         self._action_dim = int(np.prod(action_space.shape[1:]))
         self._n_envs = n_envs
         self._config = config
-        assert self.sampler.model.horizon == self.horizon * self.action_dim, (
-            f"GPlaner horizon {self.sampler.model.horizon} != "
+        assert self.sampler.horizon == self.horizon * self.action_dim, (
+            f"sampler horizon {self.sampler.horizon} != "
             f"plan horizon {self.horizon} x action dim {self.action_dim}"
         )
-        assert self.sampler.model.action_dim in (1, self.action_dim), (
-            f"GPlaner action_dim {self.sampler.model.action_dim} != env action dim x action_block {self.action_dim}"
+        assert self.sampler.action_dim in (1, self.action_dim), (
+            f"sampler action_dim {self.sampler.action_dim} != env action dim x action_block {self.action_dim}"
         )
 
     @property

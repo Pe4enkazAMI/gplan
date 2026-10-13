@@ -2,7 +2,7 @@ import pytest
 import torch
 from conftest import A, B, D, T
 
-from gplan.torch.policy import GPlaner, load_planner, Sampler, save_planner
+from gplan.torch.policy import GPlaner, load_planner, PriorSampler, Sampler, save_planner
 
 
 @pytest.mark.parametrize("action_dim, n_components", [(1, 1), (A, 1), (A, 3)])
@@ -45,3 +45,13 @@ def test_checkpoint_roundtrip(tmp_path, bare, n_components):
     assert train_args == (None if bare else {"n_steps": T})
     for k, v in model.state_dict().items():
         assert torch.equal(v, loaded.state_dict()[k]), k
+
+
+def test_prior_sampler_draws_from_the_reference_measure():
+    prior = PriorSampler(horizon=T * A, action_dim=A, reference_var=2.0)
+    z = torch.zeros(20000, D)
+    plans = prior.rollout(z, z, generator=torch.Generator().manual_seed(0))
+    assert plans.shape == (20000, T * A) and prior.n_steps == T
+    assert abs(plans.mean().item()) < 0.02 and abs(plans.var().item() - 2.0) < 0.05
+    torch.testing.assert_close(plans, prior.rollout(z, z, generator=torch.Generator().manual_seed(0)))
+    assert torch.equal(prior.rollout(z[:3], z[:3], mode="mean"), torch.zeros(3, T * A))

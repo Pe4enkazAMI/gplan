@@ -50,23 +50,28 @@ from gplan.torch.evaluation import (
     trained_on,
     use_deterministic_algorithms,
 )
+from gplan.torch.lewm import embed_dim
 from gplan.torch.policy import load_planner
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--policy", nargs="+", action="extend", choices=["gflow", "gflow-refine", "cem", "random"],
+    p.add_argument("--policy", nargs="+", action="extend",
+                   choices=["gflow", "gflow-refine", "cem", "prior", "prior-refine", "random"],
                    help="policies to evaluate on the same episodes, in this order (default: gflow cem); "
                         "repeating the flag adds to the list")
     p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
     p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
                    help="[gflow] execute the cheapest of --gflow-samples plans, a single sample, or the mean plan")
-    p.add_argument("--refine-steps", type=int, default=20, help="[gflow-refine] Adam steps on the actions")
-    p.add_argument("--refine-lr", type=float, default=0.05, help="[gflow-refine] Adam step size (z-scored units)")
+    p.add_argument("--prior-samples", type=int, default=64,
+                   help="[prior, prior-refine] plans drawn from N(0, --prior-var I) per replanning step")
+    p.add_argument("--prior-var", type=float, default=1.0, help="[prior, prior-refine] variance of the prior plans")
+    p.add_argument("--refine-steps", type=int, default=20, help="[*-refine] Adam steps on the actions")
+    p.add_argument("--refine-lr", type=float, default=0.05, help="[*-refine] Adam step size (z-scored units)")
     p.add_argument("--refine-objective", default="target", choices=["target", "cost"],
-                   help="[gflow-refine] minimize beta*J - log N(A) or J alone")
+                   help="[*-refine] minimize beta*J - log N(A) or J alone")
     p.add_argument("--refine-beta", type=float, default=None,
-                   help="[gflow-refine] per-dim beta of the target objective (default: the planner's training beta)")
+                   help="[*-refine] per-dim beta of the target objective (default: the planner's training beta)")
     p.add_argument("--task", default="tworoom", choices=sorted(TASKS), help="evaluation task preset")
     p.add_argument("--wm", default=None, help="LeWM ckpt name relative to $STABLEWM_HOME (default: from --task)")
     p.add_argument("--dataset", default=None, help="dataset name (default: from --task)")
@@ -171,14 +176,15 @@ def print_comparison(rows, successes, policies, num_eval):
     wandb.log({"comparison": table})
 
 
-def refine_settings(args, train_args, embed_dim):
-    """Settings for the gflow-refine solver; beta and s^2 default to the planner's training values."""
+def refine_settings(args, train_args, d):
+    """Settings shared by gflow-refine and prior-refine; beta and s^2 default to the planner's training
+    values (s^2 = --prior-var without a planner). d: LeWM embedding dim (beta is per dim)."""
     train_args = train_args or {}
     beta = args.refine_beta if args.refine_beta is not None else train_args.get("beta")
     if args.refine_objective == "target" and beta is None:
-        raise ValueError("--refine-beta is needed: the planner checkpoint does not record its training beta")
+        raise ValueError("--refine-beta is needed: no planner, or its checkpoint does not record its training beta")
     return dict(steps=args.refine_steps, lr=args.refine_lr, objective=args.refine_objective,
-                beta=(beta or 0.0) / embed_dim, reference_var=train_args.get("ref_var", 1.0))
+                beta=(beta or 0.0) / d, reference_var=train_args.get("ref_var", args.prior_var))
 
 
 def main():
@@ -204,9 +210,9 @@ def main():
         planner, train_args = load_planner(args.planner, args.device)
         check_planner_matches(planner, train_args, args, dataset.get_col_data("action").shape[1])
         check_no_leakage(dataset, episodes, train_args, args)
-        if "gflow-refine" in args.policy:
-            refine = refine_settings(args, train_args, embed_dim=planner.Z[0].in_features // 2)
-            print(f"gflow-refine: {refine}")
+    if any(name.endswith("-refine") for name in args.policy):  # one setting for gflow- and prior-refine
+        refine = refine_settings(args, train_args, embed_dim(wm))
+        print(f"refine: {refine}")
 
     # -- evaluate every policy on the same episodes
     rows, successes = [], {}

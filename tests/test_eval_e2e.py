@@ -91,18 +91,20 @@ def test_cem_does_not_depend_on_gflow(home, tmp_path):
 
 
 def test_every_policy_is_reproducible(home, tmp_path):
-    args = ("--policy", "gflow", "gflow-refine", "cem", "random", "--planner", str(home / "mixture.pt"),
-            "--refine-steps", "3")
+    args = ("--policy", "gflow", "gflow-refine", "cem", "prior", "prior-refine", "random",
+            "--planner", str(home / "mixture.pt"), "--refine-steps", "3", "--prior-samples", "32")
     # the second run also checks that --deterministic changes nothing on CPU
     first, second = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args, "--deterministic")
-    assert list(first) == ["gflow", "gflow-refine", "cem", "random"]
+    assert list(first) == ["gflow", "gflow-refine", "cem", "prior", "prior-refine", "random"]
     for name in first:
         assert outcome(first[name]) == outcome(second[name]), name
-    for name in ("gflow", "gflow-refine", "cem"):
+    for name in ("gflow", "gflow-refine", "cem", "prior", "prior-refine"):
         assert np.isfinite(first[name]["plan_cost"]) and first[name]["replans"] == 2, name  # budget 50 = 2 x 25 steps
     assert first["gflow-refine"]["plans_per_replan"] == 64 * (3 + 1)
     assert first["gflow-refine"]["backward_per_replan"] == 64 * 3
     assert first["cem"]["backward_per_replan"] == first["gflow"]["backward_per_replan"] == 0
+    assert first["prior"]["plans_per_replan"] == 32 and first["prior"]["backward_per_replan"] == 0
+    assert (first["prior-refine"]["plans_per_replan"], first["prior-refine"]["backward_per_replan"]) == (32 * 4, 32 * 3)
     for name in ("gflow", "cem"):  # per-replan costs average to the overall one (equal env counts)
         m = first[name]
         assert np.isclose((m["plan_cost_replan0"] + m["plan_cost_replan1"]) / 2, m["plan_cost"])

@@ -103,6 +103,10 @@ class Sampler:
     def action_dim(self):
         return self.model.action_dim
 
+    @property
+    def horizon(self):
+        return self.model.horizon
+
     def _slots(self, step):
         """Slice of the buffer holding step ``step``."""
         return slice(step * self.action_dim, (step + 1) * self.action_dim)
@@ -169,6 +173,32 @@ class Sampler:
     def reference_log_prob(self, actions):
         """log N(actions; 0, s^2 I) summed over the buffer. actions: (B, horizon) -> (B,)."""
         return reference_log_prob(actions, self.reference_var)
+
+
+class PriorSampler:
+    """Plans from the reference measure N(0, s^2 I) over z-scored actions, with the `Sampler` interface.
+
+    A baseline for the GFlowNet sampler: best-of-N over these is random shooting, and refining them
+    is plain gradient planning from random starts (the policies "prior" and "prior-refine").
+    """
+
+    def __init__(self, horizon, action_dim, reference_var=1.0):
+        assert horizon % action_dim == 0, (horizon, action_dim)
+        self.horizon, self.action_dim, self.reference_var = horizon, action_dim, reference_var
+
+    @property
+    def n_steps(self):
+        return self.horizon // self.action_dim
+
+    @torch.no_grad()
+    def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample", generator=None):
+        """(B, horizon): independent N(0, s^2) actions; mode="mean" gives the prior's mean, 0."""
+        assert actions is None and n_given == 0, "the prior does not condition on given steps"
+        shape, device = (start_state.shape[0], self.horizon), start_state.device
+        if mode == "mean":
+            return torch.zeros(shape, device=device, dtype=start_state.dtype)
+        noise = torch.randn(shape, generator=generator, device=device, dtype=start_state.dtype)
+        return self.reference_var ** 0.5 * noise
 
 
 # ----------------------------------------------------------------------------- checkpoints
