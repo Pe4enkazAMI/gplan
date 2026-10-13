@@ -5,9 +5,9 @@
 #   main         CEM (paper config), random shooting, gradient planning from random starts, random;
 #                GFlowNet best-of-64 / mean plan / + refinement; bc; map           (all training seeds)
 #   curve        success vs compute: GFlow N, refine N x steps, prior-refine N x steps, CEM samples x iters
-#   goal10/50    goal 10 / 50 steps away instead of 25 (CEM and GFlow)
+#   goal50       goal 50 steps away instead of 25: beyond the training offset (CEM and GFlow)
 #   budget25     one plan, no replanning (eval budget 25 instead of 50)
-#   lewm         CEM on every episode (the LeWM paper's protocol, for comparison with its numbers)
+#   lewm         CEM on every episode, first eval seed (the LeWM paper's protocol: a sanity check of CEM)
 #   probe        headroom probe on held-out pairs (text report)
 #   ablations    (ABLATIONS=1) each ablation's GFlowNet, best-of-64 and + refinement
 #
@@ -42,17 +42,17 @@ for e in $EVAL_SEEDS; do
       run "$RESULTS/curve/gfn-n$n-s$s-e$e.json" --seed "$e" --planner "$OUT/gfn-s$s.pt" --label gfn \
           --policy gflow --gflow-samples "$n"
     done
-    for n in 16 64; do for k in 5 20 50; do
-      [[ $n == 64 && $k == 20 ]] && continue  # in main/
+    for cfg in 16,20 64,5 64,50; do  # samples,steps (64,20 is in main/)
+      IFS=, read -r n k <<< "$cfg"
       run "$RESULTS/curve/gfn-refine-n$n-k$k-s$s-e$e.json" --seed "$e" --planner "$OUT/gfn-s$s.pt" --label gfn \
           --policy gflow-refine --gflow-samples "$n" $REFINE --refine-steps "$k"
-    done; done
+    done
   done
-  for n in 16 64; do for k in 5 20 50; do
-    [[ $n == 64 && $k == 20 ]] && continue
+  for cfg in 16,20 64,5 64,50; do
+    IFS=, read -r n k <<< "$cfg"
     run "$RESULTS/curve/prior-refine-n$n-k$k-e$e.json" --seed "$e" --policy prior-refine --prior-samples "$n" \
         $REFINE --refine-steps "$k"
-  done; done
+  done
   for cfg in 30,3,3 30,10,3 100,10,10 100,30,10 300,10,30; do  # samples,iterations,elites (elites = 10%)
     IFS=, read -r n it top <<< "$cfg"
     run "$RESULTS/curve/cem-n$n-i$it-e$e.json" --seed "$e" --policy cem --cem-samples "$n" --cem-steps "$it" \
@@ -60,12 +60,10 @@ for e in $EVAL_SEEDS; do
   done
 
   # -- goal distance and replanning
-  for k in 10 50; do
-    run "$RESULTS/goal$k/reference-e$e.json" --seed "$e" --goal-offset "$k" --policy cem
-    for s in $SEEDS; do
-      run "$RESULTS/goal$k/gfn-s$s-e$e.json" --seed "$e" --goal-offset "$k" --planner "$OUT/gfn-s$s.pt" --label gfn \
-          --policy gflow gflow-refine $REFINE
-    done
+  run "$RESULTS/goal50/reference-e$e.json" --seed "$e" --goal-offset 50 --policy cem
+  for s in $SEEDS; do
+    run "$RESULTS/goal50/gfn-s$s-e$e.json" --seed "$e" --goal-offset 50 --planner "$OUT/gfn-s$s.pt" --label gfn \
+        --policy gflow gflow-refine $REFINE
   done
   run "$RESULTS/budget25/reference-e$e.json" --seed "$e" --eval-budget 25 --policy cem
   for s in $SEEDS; do
@@ -84,10 +82,9 @@ for e in $EVAL_SEEDS; do
   fi
 done
 
-# -- the LeWM paper's protocol (every episode): CEM only, the GFlowNet trained on most of them
-for e in $EVAL_SEEDS; do
-  run "$RESULTS/lewm/reference-e$e.json" --seed "$e" --policy cem --holdout-frac 0
-done
+# -- the LeWM paper's protocol (every episode), CEM only: one eval seed is enough to check its numbers
+e=${EVAL_SEEDS%% *}
+run "$RESULTS/lewm/reference-e$e.json" --seed "$e" --policy cem --holdout-frac 0
 
 # -- headroom probe on held-out (start, goal) pairs
 for s in $SEEDS; do

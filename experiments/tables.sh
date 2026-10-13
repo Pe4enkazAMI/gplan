@@ -19,7 +19,6 @@ table() {  # table <name> <results .json files...>
 
 table main "$RESULTS"/main/*.json
 table compute_curve "$RESULTS"/main/reference-*.json "$RESULTS"/main/gfn-s*.json "$RESULTS"/curve/*.json
-table goal_offset_10 "$RESULTS"/goal10/*.json
 table goal_offset_50 "$RESULTS"/goal50/*.json
 table budget_25 "$RESULTS"/budget25/*.json
 table lewm_protocol "$RESULTS"/lewm/*.json

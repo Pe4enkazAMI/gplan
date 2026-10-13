@@ -145,11 +145,11 @@ ABLATIONS=1 bash experiments/train.sh pusht && ABLATIONS=1 bash experiments/eval
 | Table | Content |
 | --- | --- |
 | `main` | CEM (paper config), GFlow best-of-64 / mean plan / + refinement, bc, map, prior shooting, prior + refinement, random |
-| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps (GFlow and prior starts), CEM samples x iterations |
-| `goal_offset_10`, `goal_offset_50` | goals 10 / 50 steps away instead of 25 |
+| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps = 16 x 20, 64 x 5 / 20 / 50 (GFlow and prior starts), CEM samples x iterations |
+| `goal_offset_50` | goals 50 steps away instead of 25 (beyond the training offset) |
 | `budget_25` | one plan, no replanning |
-| `lewm_protocol` | CEM on every episode, comparable with the LeWM paper |
-| `ablations` | beta, VarGrad, mixture components, MALA, constant learning rate (`ABLATIONS=1`) |
+| `lewm_protocol` | CEM on every episode (first eval seed), a sanity check against the LeWM paper |
+| `ablations` | beta x 0.5 / x 2; PushT: mixture and MALA removed (2 x 2); TwoRoom: PushT's recipe (`ABLATIONS=1`, 2 seeds) |
 | probe | headroom of best-of-64 samples under gradient refinement (`results/<task>/probe/`) |
 
 Every row pools training seeds (same label) and evaluation seeds: success with a Wilson 95% interval
