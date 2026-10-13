@@ -120,6 +120,9 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
         eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
         if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
             print(f"WARNING: planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
+    if (train_args or {}).get("method") == "map" and args.gflow_select != "mean":
+        print("WARNING: a --method map planner is trained for one plan per condition (its stds are untrained); "
+              "evaluate it with --gflow-select mean")
     action_dim = env_action_dim * args.action_block
     assert planner.horizon == args.horizon * action_dim, (
         f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")

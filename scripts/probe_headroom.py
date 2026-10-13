@@ -24,8 +24,8 @@ import numpy as np
 from gplan.data import split_episodes, STABLEWM_HOME
 from gplan.jax import checkpoint
 from gplan.jax.convert import load_lewm_predictor
-from gplan.jax.latents import LatentPairs
-from gplan.jax.probe import expert_plans, lewm_action_stats, make_probe
+from gplan.jax.latents import expert_plans, LatentPairs, lewm_action_stats
+from gplan.jax.probe import make_probe
 
 
 def parse_args():

@@ -70,6 +70,16 @@ def trained(home, latents, tmp_path_factory):
     return out
 
 
+@pytest.mark.parametrize("method", ["bc", "map"])
+def test_train_baselines(home, latents, tmp_path, method):
+    out = tmp_path / method
+    run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"), "--method", method,
+         "--n-batches", "3", "--batch-size", "4", "--beta", "1", "--holdout-frac", "0.34", "--wandb-mode", "disabled",
+         "--out", str(out)], home)
+    meta = json.loads(Path(f"{out}.json").read_text())
+    assert meta["train_args"]["method"] == method and Path(f"{out}.pt").exists()
+
+
 def test_encode_dataset(home, latents):
     z = np.load(f"{latents}.npy")
     meta = np.load(f"{latents}_meta.npz")

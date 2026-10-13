@@ -51,7 +51,7 @@ class Standardizer:
 
     Same statistics as the StandardScaler in le-wm/eval.py: rows with NaN dropped, ddof=0,
     and a std of 0 replaced by 1. (LeWM's training normalizer uses ddof=1; see
-    `gplan.jax.probe.lewm_action_stats` for why the difference does not matter.)"""
+    `gplan.jax.latents.lewm_action_stats` for why the difference does not matter.)"""
 
     def __init__(self, data):
         data = data[~np.isnan(data).any(axis=1)]

@@ -16,3 +16,12 @@ class DoubleWell(eqx.Module):
 
     def cost(self, z_start, z_goal, plans):
         return (plans[:, 0, 0] ** 2 - 4.0) ** 2
+
+
+class ShiftedQuadratic(eqx.Module):
+    """J(A) = ||A - target||^2 for a fixed target plan (T, A): beta J + ||A||^2 / (2 s^2) is minimized at
+    A = 2 beta target / (2 beta + 1 / s^2)."""
+    target: jnp.ndarray
+
+    def cost(self, z_start, z_goal, plans):
+        return jnp.sum((plans - self.target) ** 2, axis=(1, 2))

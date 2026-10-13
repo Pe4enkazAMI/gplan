@@ -1,4 +1,5 @@
-"""(start, goal) latent pairs from embeddings precomputed by `scripts/encode_dataset.py`."""
+"""(start, goal) latent pairs from embeddings precomputed by `scripts/encode_dataset.py`, and the
+dataset's expert actions between them as plans (for behavior cloning and the headroom probe)."""
 
 import json
 from pathlib import Path
@@ -6,6 +7,30 @@ from pathlib import Path
 import numpy as np
 
 from gplan.data import valid_start_rows
+
+
+def lewm_action_stats(actions):
+    """Per-dimension mean and std of the raw dataset actions, as LeWM's training normalizer computes
+    them (rows with NaN dropped, unbiased std; le-wm/utils.py).
+
+    Evaluation normalizes with ddof=0 instead (`gplan.torch.evaluation.Standardizer`, as le-wm/eval.py's
+    StandardScaler does). The stds differ by a factor sqrt(N / (N - 1)), i.e. ~1 / (2N) relative:
+    negligible for datasets of thousands of frames, so plans mean the same thing on both sides."""
+    a = actions[~np.isnan(actions).any(axis=1)]
+    return a.mean(0), a.std(0, ddof=1)
+
+
+def expert_plans(actions, rows, goal_offset, n_steps, mean, std):
+    """Dataset actions from each start row to its goal row as plans (B, n_steps, frameskip * env_dim).
+
+    Rows r .. r + goal_offset - 1 hold the actions taken between frame r and frame r + goal_offset;
+    consecutive groups of `frameskip` env actions form one plan step (the layout swm's
+    WorldModelPolicy unpacks). Assumes action[r] is the action taken at frame r.
+    """
+    assert goal_offset % n_steps == 0, f"goal_offset {goal_offset} must be a multiple of n_steps {n_steps}"
+    seg = actions[rows[:, None] + np.arange(goal_offset)]           # (B, goal_offset, env_dim)
+    seg = (seg - mean) / std
+    return seg.reshape(len(rows), n_steps, -1).astype(np.float32)
 
 
 class LatentPairs:
@@ -51,3 +76,13 @@ class LatentPairs:
         rng = np.random.default_rng(seed)
         for _ in range(n_batches):
             yield self.pairs(self.sample_rows(batch_size, rng))
+
+    def expert_batches(self, n_batches, batch_size, n_steps, seed=0):
+        """Yield `n_batches` of (z_start, z_goal, expert plan): the dataset's actions between start and
+        goal, z-scored with LeWM's action statistics, as (batch_size, n_steps, goal_offset / n_steps *
+        env action dim) plans. Same row sampling as `batches`."""
+        mean, std = lewm_action_stats(self.actions)
+        rng = np.random.default_rng(seed)
+        for _ in range(n_batches):
+            rows = self.sample_rows(batch_size, rng)
+            yield (*self.pairs(rows), expert_plans(self.actions, rows, self.goal_offset, n_steps, mean, std))

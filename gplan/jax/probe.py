@@ -15,7 +15,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 
 from gplan.jax.policy import rollout
@@ -44,30 +43,6 @@ def refine_plans(cost_model, z_start, z_goal, plans, beta, reference_var, steps,
 
     (plans, _), _ = jax.lax.scan(step, (plans, opt.init(plans)), None, length=steps)
     return plans
-
-
-def lewm_action_stats(actions):
-    """Per-dimension mean and std of the raw dataset actions, as LeWM's training normalizer computes
-    them (rows with NaN dropped, unbiased std; le-wm/utils.py).
-
-    Evaluation normalizes with ddof=0 instead (`gplan.torch.evaluation.Standardizer`, as le-wm/eval.py's
-    StandardScaler does). The stds differ by a factor sqrt(N / (N - 1)), i.e. ~1 / (2N) relative:
-    negligible for datasets of thousands of frames, so plans mean the same thing on both sides."""
-    a = actions[~np.isnan(actions).any(axis=1)]
-    return a.mean(0), a.std(0, ddof=1)
-
-
-def expert_plans(actions, rows, goal_offset, n_steps, mean, std):
-    """Dataset actions from each start row to its goal row as plans (B, n_steps, frameskip * env_dim).
-
-    Rows r .. r + goal_offset - 1 hold the actions taken between frame r and frame r + goal_offset;
-    consecutive groups of `frameskip` env actions form one plan step (the layout swm's
-    WorldModelPolicy unpacks). Assumes action[r] is the action taken at frame r.
-    """
-    assert goal_offset % n_steps == 0, f"goal_offset {goal_offset} must be a multiple of n_steps {n_steps}"
-    seg = actions[rows[:, None] + np.arange(goal_offset)]           # (B, goal_offset, env_dim)
-    seg = (seg - mean) / std
-    return seg.reshape(len(rows), n_steps, -1).astype(np.float32)
 
 
 def make_probe(planner, cost_model, plan_shape, n_samples, beta, reference_var, steps, lr, objective):

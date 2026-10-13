@@ -1,4 +1,6 @@
-"""Train the GPlaner sampler (JAX) as a conditional GFlowNet over LeWM action plans.
+"""Train the GPlaner sampler (JAX) as a conditional GFlowNet over LeWM action plans (--method gfn),
+or the same network as a baseline: behavior cloning on the dataset's expert actions (--method bc) or
+amortized MAP planning through LeWM (--method map; evaluate with --gflow-select mean).
 
 Needs precomputed embeddings (scripts/encode_dataset.py). Writes outputs/<name>.{eqx,json,pt};
 the .pt is what scripts/evaluate.py loads.
@@ -7,12 +9,15 @@ the .pt is what scripts/evaluate.py loads.
     python scripts/train.py --loss vargrad --n-samples 8
     python scripts/train.py --n-components 4             # EXP: mixture of 4 Gaussians per plan step
     python scripts/train.py --ls-steps 10                 # EXP: + 10 MALA steps per plan as off-policy data
+    python scripts/train.py --method bc                   # baseline: behavior cloning on expert actions
+    python scripts/train.py --method map --beta 120       # baseline: one plan per condition, min beta J - log N
 
 See gplan/jax/losses.py for the target distribution and the two losses.
 """
 
 import argparse
 import os
+from functools import partial
 from pathlib import Path
 
 import jax
@@ -20,6 +25,7 @@ import wandb
 
 from gplan.data import split_episodes, STABLEWM_HOME
 from gplan.jax import checkpoint
+from gplan.jax.baselines import bc_loss, map_loss, train_baseline
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
 from gplan.jax.policy import GPlaner
@@ -28,6 +34,9 @@ from gplan.jax.train import init_key, linear_beta_schedule, lr_schedule, train, 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--method", default="gfn", choices=["gfn", "bc", "map"],
+                   help="gfn: the GFlowNet; bc: behavior cloning on expert plans; map: amortized MAP planning "
+                        "(gplan/jax/baselines.py). bc / map ignore the GFlowNet-only flags (loss, MALA, beta warmup)")
     p.add_argument("--ckpt", type=Path, default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
     p.add_argument("--dataset", default="tworoom", help="dataset name under $STABLEWM_HOME")
     p.add_argument("--latents", type=Path, default=None,
@@ -110,11 +119,25 @@ def main():
     wandb.define_metric("loss/total", summary="min")
     wandb.define_metric("cost/mean", summary="min")
 
-    beta = linear_beta_schedule(args.beta / d, args.beta_start / d, args.beta_warmup)
-    model, losses = train(model, cost_model, pairs.batches(args.n_batches, args.batch_size, args.seed), beta, cfg,
-                          lr=lr_schedule(args.lr, args.lr_schedule, args.n_batches),
-                          lr_z=lr_schedule(args.lr_z, args.lr_schedule, args.n_batches),
-                          seed=args.seed, log_every=args.log_every)
+    lr = lr_schedule(args.lr, args.lr_schedule, args.n_batches)
+    if args.method == "gfn":
+        beta = linear_beta_schedule(args.beta / d, args.beta_start / d, args.beta_warmup)
+        model, losses = train(model, cost_model, pairs.batches(args.n_batches, args.batch_size, args.seed), beta,
+                              cfg, lr=lr, lr_z=lr_schedule(args.lr_z, args.lr_schedule, args.n_batches),
+                              seed=args.seed, log_every=args.log_every)
+    elif args.method == "bc":
+        env_dim = pairs.actions.shape[1]
+        assert args.goal_offset % args.n_steps == 0 and args.goal_offset // args.n_steps * env_dim == args.action_dim, (
+            f"bc needs --goal-offset = --n-steps x frameskip (expert plan step = {args.action_dim} values "
+            f"= frameskip x {env_dim}-d env actions)")
+        batches = pairs.expert_batches(args.n_batches, args.batch_size, args.n_steps, args.seed)
+        model, losses = train_baseline(model, bc_loss, batches, lr=lr, grad_clip=args.grad_clip,
+                                       log_every=args.log_every)
+    else:  # map: the final beta, no warmup
+        loss_fn = partial(map_loss, cost_model=cost_model, beta=args.beta / d, reference_var=args.ref_var,
+                          action_dim=args.action_dim)
+        model, losses = train_baseline(model, loss_fn, pairs.batches(args.n_batches, args.batch_size, args.seed),
+                                       lr=lr, grad_clip=args.grad_clip, log_every=args.log_every)
 
     checkpoint.save(args.out, model, model_kwargs, train_args=config)
     print(f"saved {args.out}.eqx / .json / .pt")
