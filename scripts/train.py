@@ -18,7 +18,7 @@ from pathlib import Path
 import jax
 import wandb
 
-from gplan.data import STABLEWM_HOME
+from gplan.data import split_episodes, STABLEWM_HOME
 from gplan.jax import checkpoint
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
@@ -33,6 +33,10 @@ def parse_args():
     p.add_argument("--latents", type=Path, default=None,
                    help="prefix of the precomputed embeddings (default: $STABLEWM_HOME/<dataset>_latents)")
     p.add_argument("--goal-offset", type=int, default=25, help="goal = start + this many dataset steps")
+    p.add_argument("--holdout-frac", type=float, default=0.0,
+                   help="hold this fraction of episodes out of training (gplan.data.split_episodes), so "
+                        "evaluate.py --holdout-frac / --split-seed can test on unseen episodes (0 = train on all)")
+    p.add_argument("--split-seed", type=int, default=0, help="seed of the episode split")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
     p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
     p.add_argument("--n-components", type=int, default=1,
@@ -82,6 +86,10 @@ def main():
     cost_model = load_lewm_predictor(args.ckpt)  # torch is used only here, on CPU
     pairs = LatentPairs(args.latents or STABLEWM_HOME / f"{args.dataset}_latents", args.goal_offset,
                         expected_ckpt=args.ckpt)
+    if args.holdout_frac > 0:
+        train_eps, held_out = split_episodes(pairs.ep_idx, args.holdout_frac, args.split_seed)
+        pairs.keep_episodes(train_eps)
+        print(f"training on {len(train_eps)} episodes, {len(held_out)} held out for evaluation")
     d = pairs.embed_dim
     model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
                         n_components=args.n_components)

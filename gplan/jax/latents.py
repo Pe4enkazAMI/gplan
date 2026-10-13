@@ -23,8 +23,15 @@ class LatentPairs:
         self.latents = np.load(f"{prefix}.npy", mmap_mode="r")
         meta = np.load(f"{prefix}_meta.npz")
         self.goal_offset = goal_offset
+        self.ep_idx = meta["ep_idx"]
         self.valid = valid_start_rows(meta["ep_idx"], meta["step_idx"], goal_offset)
         self.actions = meta["action"]  # (N, env_action_dim), raw dataset actions (not normalized)
+
+    def keep_episodes(self, episodes):
+        """Draw pairs only from these episodes (e.g. the training side of `gplan.data.split_episodes`).
+        Start and goal of a pair are always in the same episode."""
+        self.valid = self.valid[np.isin(self.ep_idx[self.valid], episodes)]
+        assert len(self.valid) > 0, "no valid start rows left in the kept episodes"
 
     @property
     def embed_dim(self):

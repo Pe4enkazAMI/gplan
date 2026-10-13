@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from gplan.data import STABLEWM_HOME
+from gplan.data import split_episodes, STABLEWM_HOME
 from gplan.jax import checkpoint
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
@@ -35,6 +35,9 @@ def parse_args():
     p.add_argument("--latents", type=Path, default=None, help="latents prefix (default: the training dataset's)")
     p.add_argument("--goal-offset", type=int, default=None, help="default: as in training")
     p.add_argument("--beta", type=float, default=None, help="per-dim beta of the target objective (default: training)")
+    p.add_argument("--split", default=None, choices=["holdout", "train", "all"],
+                   help="pairs from the planner's held-out episodes, its training episodes, or all "
+                        "(default: holdout if the planner was trained with --holdout-frac, else all)")
     p.add_argument("--n-pairs", type=int, default=2048)
     p.add_argument("--chunk", type=int, default=64, help="pairs per jitted call (memory: chunk * n_samples plans)")
     p.add_argument("--n-samples", type=int, default=64, help="N in best-of-N")
@@ -80,6 +83,14 @@ def main():
 
     cost_model = load_lewm_predictor(ckpt)  # torch is used only here, on CPU
     pairs = LatentPairs(latents, goal_offset, expected_ckpt=ckpt)
+    holdout_frac, split_seed = train_args.get("holdout_frac", 0.0), train_args.get("split_seed", 0)
+    split = args.split or ("holdout" if holdout_frac > 0 else "all")
+    if split != "all":
+        if holdout_frac <= 0:
+            raise SystemExit("--split holdout/train needs a planner trained with --holdout-frac > 0")
+        train_eps, held_out = split_episodes(pairs.ep_idx, holdout_frac, split_seed)
+        pairs.keep_episodes(held_out if split == "holdout" else train_eps)
+    print(f"pairs from {split} episodes")
     beta = (args.beta if args.beta is not None else train_args["beta"]) / pairs.embed_dim
 
     mean, std = lewm_action_stats(pairs.actions)

@@ -42,10 +42,12 @@ import wandb
 from gplan.data import STABLEWM_HOME
 from gplan.torch.evaluation import (
     build_policy,
+    eval_episode_pool,
     evaluate,
     fit_normalizers,
     sample_eval_starts,
     TASKS,
+    trained_on,
     use_deterministic_algorithms,
 )
 from gplan.torch.policy import load_planner
@@ -70,6 +72,10 @@ def parse_args():
     p.add_argument("--dataset", default=None, help="dataset name (default: from --task)")
     p.add_argument("--env", default=None, help="gymnasium env id (default: from --task)")
     p.add_argument("--num-eval", type=int, default=50)
+    p.add_argument("--holdout-frac", type=float, default=0.0,
+                   help="draw episodes only from the held-out side of this episode split (train.py --holdout-frac); "
+                        "0 = all episodes, the LeWM protocol")
+    p.add_argument("--split-seed", type=int, default=0, help="seed of the episode split (train.py --split-seed)")
     p.add_argument("--goal-offset", type=int, default=25)
     p.add_argument("--eval-budget", type=int, default=50)
     p.add_argument("--horizon", type=int, default=5)
@@ -114,9 +120,29 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
         f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")
 
 
-def write_results(path, args, rows, successes):
-    """Metrics and per-episode successes of every policy, for scripted comparisons across runs."""
+def check_no_leakage(dataset, episodes, train_args, args):
+    """Evaluating on episodes the planner trained on is an error with a held-out split and a warning
+    under the LeWM protocol (--holdout-frac 0), where it is unavoidable for a planner trained on all."""
+    if (train_args or {}).get("dataset", args.dataset) != args.dataset:
+        return  # different datasets: episode ids do not correspond (check_planner_matches warned)
+    seen = trained_on(dataset, episodes, train_args)
+    if not seen:
+        return
+    msg = (f"{len(set(seen))} of the {len(set(episodes))} evaluation episodes were in the planner's training data "
+           f"(planner: holdout_frac={(train_args or {}).get('holdout_frac', 0.0)}, "
+           f"split_seed={(train_args or {}).get('split_seed', 0)}; eval: --holdout-frac {args.holdout_frac} "
+           f"--split-seed {args.split_seed})")
+    if args.holdout_frac > 0:
+        raise SystemExit(f"ERROR: {msg}. Evaluate with the planner's split, or train with this one.")
+    print(f"WARNING: {msg}")
+
+
+def write_results(path, args, rows, successes, episodes, start_steps, planner_train_args):
+    """Metrics and per-episode successes of every policy, the evaluated (episode, start step) pairs and
+    the planner's training config: everything scripts/aggregate_results.py needs."""
     out = {"args": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+           "episodes": [[int(e), int(s)] for e, s in zip(episodes, start_steps)],
+           "planner_train_args": planner_train_args,
            "policies": {name: {**m, "episode_successes": successes[name].tolist()} for name, m in rows}}
     Path(path).write_text(json.dumps(out, indent=2))
     print(f"wrote {path}")
@@ -166,16 +192,18 @@ def main():
     # -- data: start/goal pairs (shared by every policy) and normalization stats
     dataset = swm.data.HDF5Dataset(args.dataset, keys_to_cache=list(task.cache_keys))
     process = fit_normalizers(dataset, task.cache_keys)
-    episodes, start_steps = sample_eval_starts(dataset, args.num_eval, args.goal_offset, args.seed)
+    pool = eval_episode_pool(dataset, args.holdout_frac, args.split_seed)
+    episodes, start_steps = sample_eval_starts(dataset, args.num_eval, args.goal_offset, args.seed, pool)
 
     # -- shared frozen world model and (optionally) the trained planner
-    wm = planner = refine = None
+    wm = planner = refine = train_args = None
     if any(name != "random" for name in args.policy):
         wm = swm.policy.AutoCostModel(args.wm).to(args.device)
         wm.eval().requires_grad_(False)
     if any(name.startswith("gflow") for name in args.policy):
         planner, train_args = load_planner(args.planner, args.device)
         check_planner_matches(planner, train_args, args, dataset.get_col_data("action").shape[1])
+        check_no_leakage(dataset, episodes, train_args, args)
         if "gflow-refine" in args.policy:
             refine = refine_settings(args, train_args, embed_dim=planner.Z[0].in_features // 2)
             print(f"gflow-refine: {refine}")
@@ -194,7 +222,7 @@ def main():
 
     print_comparison(rows, successes, args.policy, args.num_eval)
     if args.results_json:
-        write_results(args.results_json, args, rows, successes)
+        write_results(args.results_json, args, rows, successes, episodes, start_steps, train_args)
     wandb.finish()
 
 

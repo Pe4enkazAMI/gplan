@@ -18,6 +18,7 @@ import torch
 from conftest import make_wm
 
 swm = pytest.importorskip("stable_worldmodel")
+from gplan.data import episode_column, split_episodes  # noqa: E402
 from gplan.torch.policy import GPlaner, save_planner  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -45,21 +46,29 @@ def home(tmp_path_factory):
         torch.manual_seed(seed)
         kwargs = dict(state_dim=EMBED, horizon=5 * ACTION_DIM, action_dim=ACTION_DIM, n_components=n_components)
         save_planner(home / f"{name}.pt", GPlaner(**kwargs), kwargs, train_args={"beta": 90.0})
+    # trained (nominally) with half of toy_tworoom's episodes held out
+    split_args = {"beta": 90.0, "dataset": "toy_tworoom", "holdout_frac": 0.5, "split_seed": 0}
+    save_planner(home / "gauss_split.pt", GPlaner(**kwargs), kwargs, train_args=split_args)
     return home
 
 
-def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom"):
-    """Run scripts/evaluate.py in a fresh process (as on the cluster); returns the --results-json content."""
+def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom", full=False, expect_failure=False):
+    """Run scripts/evaluate.py in a fresh process (as on the cluster); returns the policies of the
+    --results-json (the whole file with full=True, the console output with expect_failure=True)."""
     out = tmp_path / f"results_{len(list(tmp_path.glob('results_*')))}.json"
     env = {**os.environ, "STABLEWM_HOME": str(home), "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}"}
     cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), "--task", task, "--wm", "toy/lewm",
            "--dataset", dataset, "--num-eval", "4", "--img-size", "8", "--device", "cpu",
            "--wandb-mode", "disabled", "--results-json", str(out), *args]
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
+    if expect_failure:
+        assert proc.returncode != 0
+        return proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
     # swm only warns when a reset column is missing and then keeps the env's own random start
     assert "skipping callable" not in proc.stdout + proc.stderr
-    return json.loads(out.read_text())["policies"]
+    results = json.loads(out.read_text())
+    return results if full else results["policies"]
 
 
 def outcome(metrics):
@@ -106,3 +115,21 @@ def test_pusht_resets_from_the_full_state(home, tmp_path):
     res = evaluate(home, tmp_path, "--policy", "cem", "random", "--cem-steps", "2", task="pusht", dataset="toy_pusht")
     assert set(res) == {"cem", "random"}
     assert len(res["cem"]["episode_successes"]) == 4
+
+
+def test_held_out_evaluation_uses_only_unseen_episodes(home, tmp_path):
+    """With --holdout-frac, episodes come from the held-out side of the split; a planner whose
+    recorded split does not hold them out is refused instead of being evaluated on its training data."""
+    res = evaluate(home, tmp_path, "--policy", "gflow", "cem", "--planner", str(home / "gauss_split.pt"),
+                   "--holdout-frac", "0.5", "--split-seed", "0", full=True)
+    dataset = swm.data.HDF5Dataset("toy_tworoom", cache_dir=home)
+    _, held_out = split_episodes(dataset.get_col_data(episode_column(dataset.column_names)), 0.5, 0)
+    assert {ep for ep, _ in res["episodes"]} <= set(held_out.tolist())
+    assert res["planner_train_args"]["holdout_frac"] == 0.5 and set(res["policies"]) == {"gflow", "cem"}
+
+    out = evaluate(home, tmp_path, "--policy", "gflow", "--planner", str(home / "gauss.pt"),
+                   "--holdout-frac", "0.5", expect_failure=True)
+    assert "were in the planner's training data" in out
+    out = evaluate(home, tmp_path, "--policy", "gflow", "--planner", str(home / "gauss_split.pt"),
+                   "--holdout-frac", "0.5", "--split-seed", "1", expect_failure=True)  # a different split
+    assert "were in the planner's training data" in out

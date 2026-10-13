@@ -3,8 +3,10 @@
 import numpy as np
 import pytest
 
+from gplan.data import split_episodes
+
 pytest.importorskip("stable_worldmodel")
-from gplan.torch.evaluation import sample_eval_starts, Standardizer, TASKS  # noqa: E402
+from gplan.torch.evaluation import sample_eval_starts, Standardizer, TASKS, trained_on  # noqa: E402
 
 
 class FakeDataset:
@@ -61,3 +63,21 @@ def test_standardizer_matches_sklearn_conventions():
     np.testing.assert_allclose(s.std, [np.std([1.0, 3.0, 2.0]), 1.0])  # ddof=0; constant column -> 1
     x = np.array([[2.5, 7.0]])
     np.testing.assert_allclose(s.inverse_transform(s.transform(x)), x)
+
+
+def test_eval_starts_can_be_restricted_to_held_out_episodes():
+    lengths = [40, 80, 33, 120, 60, 70, 90, 50]
+    ds = FakeDataset(np.repeat(np.arange(len(lengths)), lengths), np.concatenate([np.arange(n) for n in lengths]))
+    eps, steps = sample_eval_starts(ds, 20, 25, seed=0, episodes=[1, 6])
+    assert set(eps) <= {1, 6} and len(eps) == 20
+    with pytest.raises(ValueError):
+        sample_eval_starts(ds, 200, 25, seed=0, episodes=[2])  # episode 2 has 33 - 25 = 8 valid starts
+
+
+def test_trained_on_follows_the_planners_recorded_split():
+    lengths = [30] * 10
+    ds = FakeDataset(np.repeat(np.arange(10), lengths), np.concatenate([np.arange(n) for n in lengths]))
+    assert trained_on(ds, [0, 5], None) == [0, 5]  # no split recorded: trained on everything
+    train_eps, held = split_episodes(ds.get_col_data("ep_idx"), 0.3, 1)
+    assert trained_on(ds, held.tolist(), {"holdout_frac": 0.3, "split_seed": 1}) == []
+    assert trained_on(ds, [int(train_eps[0])], {"holdout_frac": 0.3, "split_seed": 1}) == [int(train_eps[0])]

@@ -26,3 +26,19 @@ def steps_left(ep_idx, step_idx):
 def valid_start_rows(ep_idx, step_idx, goal_offset):
     """Dataset rows with at least `goal_offset` steps left in their episode (so row + goal_offset is the goal)."""
     return np.nonzero(steps_left(ep_idx, step_idx) >= goal_offset)[0]
+
+
+def split_episodes(ep_idx, holdout_frac, seed=0):
+    """Episode-level train / held-out split: (train episode ids, held-out episode ids), both sorted.
+
+    round(holdout_frac * n_episodes) episodes (at least one if holdout_frac > 0), chosen by a
+    permutation seeded with `seed`, are held out. The split depends only on the set of episode ids,
+    so training (latents' metadata) and evaluation (the .h5 dataset) compute the same one.
+    """
+    episodes = np.unique(ep_idx)
+    if holdout_frac <= 0:
+        return episodes, episodes[:0]
+    n_held = max(1, int(round(holdout_frac * len(episodes))))
+    assert n_held < len(episodes), f"holdout_frac {holdout_frac} leaves no training episodes"
+    held = np.sort(episodes[np.random.default_rng(seed).permutation(len(episodes))[:n_held]])
+    return np.setdiff1d(episodes, held), held

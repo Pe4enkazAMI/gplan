@@ -18,7 +18,7 @@ import numpy as np
 import stable_worldmodel as swm
 import torch
 
-from gplan.data import episode_column, valid_start_rows
+from gplan.data import episode_column, split_episodes, valid_start_rows
 from gplan.torch.lewm import img_transform
 from gplan.torch.policy import Sampler
 from gplan.torch.solvers import CostLoggingSolver, GFlowSolver
@@ -84,16 +84,39 @@ def fit_normalizers(dataset, cols):
     return process
 
 
-def sample_eval_starts(dataset, num_eval, goal_offset, seed):
+def sample_eval_starts(dataset, num_eval, goal_offset, seed, episodes=None):
     """Pick `num_eval` dataset rows that have at least `goal_offset` steps left in their episode.
 
-    Draws exactly like le-wm/eval.py (including its `len(valid) - 1`), so the same seed gives
-    the same (episode, start step) pairs LeWM was evaluated on."""
+    Draws exactly like le-wm/eval.py (including its `len(valid) - 1`), so with `episodes=None` the
+    same seed gives the same (episode, start step) pairs LeWM was evaluated on. `episodes` restricts
+    the draw to those episode ids (e.g. the held-out side of `gplan.data.split_episodes`)."""
     ep_col = episode_column(dataset.column_names)
-    valid = valid_start_rows(dataset.get_col_data(ep_col), dataset.get_col_data("step_idx"), goal_offset)
+    ep_idx = dataset.get_col_data(ep_col)
+    valid = valid_start_rows(ep_idx, dataset.get_col_data("step_idx"), goal_offset)
+    if episodes is not None:
+        valid = valid[np.isin(ep_idx[valid], episodes)]
+    if len(valid) - 1 < num_eval:
+        raise ValueError(f"only {len(valid)} valid start rows for {num_eval} evaluation episodes")
     picked = np.random.default_rng(seed).choice(len(valid) - 1, size=num_eval, replace=False)
     rows = dataset.get_row_data(np.sort(valid[picked]))
     return rows[ep_col].tolist(), rows["step_idx"].tolist()
+
+
+def eval_episode_pool(dataset, holdout_frac, split_seed):
+    """Episodes evaluation may draw from: all of them (holdout_frac = 0, the LeWM protocol) or the
+    held-out side of the split training used."""
+    if holdout_frac <= 0:
+        return None
+    return split_episodes(dataset.get_col_data(episode_column(dataset.column_names)), holdout_frac, split_seed)[1]
+
+
+def trained_on(dataset, episodes, train_args):
+    """Which of `episodes` were in a planner's training data, from the split recorded in its
+    train_args (no split recorded = it trained on every episode)."""
+    train_args = train_args or {}
+    ep_idx = dataset.get_col_data(episode_column(dataset.column_names))
+    train_eps, _ = split_episodes(ep_idx, train_args.get("holdout_frac", 0.0), train_args.get("split_seed", 0))
+    return sorted(set(episodes) & set(train_eps.tolist()))
 
 
 def build_policy(name, args, wm, process, planner, refine=None):
