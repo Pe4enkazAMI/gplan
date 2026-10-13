@@ -96,6 +96,9 @@ def parse_args():
     p.add_argument("--deterministic", action="store_true",
                    help="deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower)")
     p.add_argument("--video-dir", default=None, help="save rollout videos under <dir>/<policy>/ (off by default)")
+    p.add_argument("--label", default=None,
+                   help="name of the planner config in --results-json (scripts/aggregate_results.py pools runs "
+                        "with the same label, e.g. several training seeds; default: the planner file's name)")
     p.add_argument("--results-json", type=Path, default=None,
                    help="also write every policy's metrics and per-episode successes to this .json")
     p.add_argument("--wandb-project", default="gplan")

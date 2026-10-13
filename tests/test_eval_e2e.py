@@ -19,6 +19,7 @@ from conftest import make_wm
 
 swm = pytest.importorskip("stable_worldmodel")
 from gplan.data import episode_column, split_episodes  # noqa: E402
+from gplan.results import comparison_table, group_runs, load_runs  # noqa: E402
 from gplan.torch.policy import GPlaner, save_planner  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -102,6 +103,11 @@ def test_every_policy_is_reproducible(home, tmp_path):
         assert np.isfinite(first[name]["plan_cost"]) and first[name]["replans"] == 2, name  # budget 50 = 2 x 25 steps
     assert first["gflow-refine"]["plans_per_replan"] == 64 * (3 + 1)
     assert first["gflow-refine"]["backward_per_replan"] == 64 * 3
+
+    # the aggregation reads these files: a repeated run is one result per policy, paired with CEM
+    rows = {r["policy"]: r for r in comparison_table(group_runs(load_runs(sorted(tmp_path.glob("results_*.json")))))}
+    assert set(rows) == set(first) and all(r["episodes"] == 4 for r in rows.values())
+    assert rows["gflow"]["label"] == "mixture" and "only_reference" in rows["gflow"]
     assert first["cem"]["backward_per_replan"] == first["gflow"]["backward_per_replan"] == 0
     assert first["prior"]["plans_per_replan"] == 32 and first["prior"]["backward_per_replan"] == 0
     assert (first["prior-refine"]["plans_per_replan"], first["prior-refine"]["backward_per_replan"]) == (32 * 4, 32 * 3)
