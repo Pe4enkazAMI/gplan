@@ -56,6 +56,16 @@ def linear_beta_schedule(beta_end, beta_start=0.0, warmup_steps=0):
     return lambda step: beta_start + (beta_end - beta_start) * min(1.0, step / warmup_steps)
 
 
+def lr_schedule(peak, kind, n_steps):
+    """A learning rate for `make_optimizer`: `peak` itself ("constant"), or a cosine decay from `peak`
+    to 0 over `n_steps` ("cosine"), so the last iterate settles at the optimum instead of jittering
+    around it (see tests/test_jax_train.py)."""
+    if kind == "constant":
+        return peak
+    assert kind == "cosine", kind
+    return optax.cosine_decay_schedule(peak, n_steps)
+
+
 def make_optimizer(model, lr, lr_z=None, grad_clip=0.0):
     """Global-norm clipping, then Adam on the policy and Adam at `lr_z` on the log Z head (`model.Z`).
 

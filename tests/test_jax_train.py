@@ -19,6 +19,7 @@ from gplan.jax.convert import gplaner_to_torch, lewm_from_torch
 from gplan.jax.train import (
     init_key,
     linear_beta_schedule,
+    lr_schedule,
     make_optimizer,
     norm_stats,
     train,
@@ -48,7 +49,7 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))
     cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0,
                       ls_steps=ls_steps, ls_step_size=0.05)
-    lr, lr_z = (optax.cosine_decay_schedule(peak, steps) for peak in (1e-3, 1e-2))
+    lr, lr_z = (lr_schedule(peak, "cosine", steps) for peak in (1e-3, 1e-2))
     model, losses = train(model, QuadraticCost(), [batch] * steps, beta, cfg, lr=lr, lr_z=lr_z, log_every=10**9)
 
     zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
@@ -143,3 +144,9 @@ def test_gradient_clipping_and_its_stats():
     assert float(stats["grad_norm/clipped"]) == 1.0 and np.isclose(float(stats["grad_norm/clip_scale"]), 0.25)
     assert np.isclose(float(stats["grad_norm/global"]), raw / 4)
     assert float(norm_stats(model, grads, grad_clip=0.0)["grad_norm/global"]) == float(stats["grad_norm/global_raw"])
+
+
+def test_lr_schedule():
+    assert lr_schedule(1e-3, "constant", 100) == 1e-3
+    cosine = lr_schedule(1e-3, "cosine", 100)
+    np.testing.assert_allclose([float(cosine(s)) for s in (0, 50, 100)], [1e-3, 5e-4, 0.0], atol=1e-12)
