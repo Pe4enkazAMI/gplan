@@ -69,7 +69,10 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.5
 python -c "import jax; print(jax.devices())"   # should list a CUDA device
 ```
 
-Run precompute and evaluation (PyTorch) and training (JAX) as separate processes.
+Run precompute and evaluation (PyTorch) and training (JAX) as separate processes. Each JAX
+process reserves its fraction of the shared memory when it starts, so two JAX processes at 0.5
+take all of it (the OS included) and can freeze the machine; to run several at once, use
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` (allocate on demand) or smaller fractions.
 
 ## Workflow
 
@@ -159,6 +162,13 @@ pytest                    # everything, ~7 min on CPU
 pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~1.5 min
 ruff check .              # pyflakes + import order
 ```
+
+The tests run on CPU, also on a GPU machine: `tests/conftest.py` hides the GPU from JAX and
+PyTorch for the test session and every script it starts, and turns off JAX's memory
+pre-allocation. (The script and end-to-end tests start several processes; with pre-allocation each
+JAX process would reserve 75% of GPU memory, which on the GB10's shared memory freezes the machine.)
+`GPLAN_TESTS_ON_GPU=1 pytest` runs on the GPU anyway, allocating on demand. The largest test
+process peaks at about 2.6 GB.
 
 JAX code is checked against the PyTorch code on identical weights (cost, policy, losses and
 gradients), the PyTorch probability code against `torch.distributions`, training against

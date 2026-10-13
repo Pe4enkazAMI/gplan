@@ -1,6 +1,18 @@
 """Shared fixtures: a tiny random LeWorldModel and a GPlaner, small enough to run on CPU in seconds."""
 
-from types import SimpleNamespace
+import os
+
+# The tests run on CPU, and so does every subprocess they start (scripts/*.py inherit this
+# environment). On a GPU, JAX pre-allocates 75% of the GPU's memory per process; the script and
+# end-to-end tests start several JAX processes while this one is alive, and on a GPU that shares
+# memory with the CPU (DGX Spark / GB10) that exhausts the machine's RAM and freezes it.
+# Set GPLAN_TESTS_ON_GPU=1 to run on the GPU anyway (memory is then allocated on demand).
+if os.environ.get("GPLAN_TESTS_ON_GPU") != "1":
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # PyTorch: no CUDA context either
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+from types import SimpleNamespace  # noqa: E402
 
 import pytest
 import torch
