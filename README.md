@@ -19,12 +19,13 @@ evaluation run in **PyTorch** (the original LeWM and `stable_worldmodel`).
 
 ```
 gplan/
-  data.py            NumPy helpers shared by both sides (STABLEWM_HOME, valid start rows)
+  data.py            NumPy helpers shared by both sides (STABLEWM_HOME, valid start rows, episode split)
+  results.py         pool evaluate.py result files: Wilson intervals, paired McNemar tests
   torch/             PyTorch: everything that needs the original LeWM
     lewm.py            load, encode frames, planning cost J (reference implementation)
     precompute.py      encode every dataset frame into latents for training
     distributions.py   DiagGaussianMixture (twin of gplan/jax/distributions.py)
-    policy.py          GPlaner + Sampler used at evaluation, checkpoint I/O
+    policy.py          GPlaner + Sampler used at evaluation, PriorSampler (baselines), checkpoint I/O
     solvers.py         GFlowNet best-of-N solver (+ test-time refinement), cost logging
     evaluation.py      the LeWM protocol: TwoRoom / PushT presets, normalizers, start sampling
   jax/               JAX: training
@@ -33,13 +34,16 @@ gplan/
     policy.py          GPlaner, sampling, teacher-forced step log-probs
     losses.py          TB and VarGrad on xi = log P_F + β'J − log N(A), diagnostics
     mala.py            MALA local search on plans (off-policy training samples)
-    latents.py         (start, goal = start + k) pairs from the precomputed latents
+    baselines.py       behavior cloning and amortized MAP planning with the same network
+    latents.py         (start, goal) pairs from the precomputed latents, expert plans between them
     train.py           optimizer, jitted train step, training loop, random streams
-    probe.py           headroom probe: gradient refinement through LeWM, expert plans
+    probe.py           headroom probe: gradient refinement of sampled plans through LeWM
     convert.py         weights PyTorch <-> Equinox (LeWM predictor, GPlaner)
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
-scripts/             convert_lewm, encode_dataset, train, export_planner, evaluate, probe_headroom
+scripts/             convert_lewm, encode_dataset, train, export_planner, evaluate, aggregate_results,
+                     probe_headroom
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
+                     test_jax_optimum / test_jax_baselines (closed-form optima), test_results,
                      test_eval_e2e (evaluate.py on a tiny real swm setup), test_scripts (every CLI)
 le-wm/               LeWM sources (git submodule)
 ```
@@ -106,10 +110,13 @@ Every policy has its own settings, so CEM always runs the LeWM paper configurati
 
 | Flag | Meaning |
 | --- | --- |
-| `--policy gflow gflow-refine cem random` | policies, run in this order on the same episodes |
+| `--policy gflow gflow-refine cem prior prior-refine random` | policies, run in this order on the same episodes |
 | `--gflow-samples N` (64) | plans drawn from the GPlaner per replanning step |
 | `--gflow-select min-cost \| sample \| mean` | execute the cheapest of N, one sample, or the most likely mode |
-| `--refine-steps / --refine-lr / --refine-objective` | `gflow-refine`: Adam steps on the actions through LeWM before picking the cheapest (a diagnostic, not the amortized planner) |
+| `--refine-steps / --refine-lr / --refine-objective` | `gflow-refine` / `prior-refine`: Adam steps on the actions through LeWM before picking the cheapest |
+| `--prior-samples N` (64) `--prior-var` (1) | `prior`: best-of-N random shooting from N(0, s² I); `prior-refine`: the same plans refined like `gflow-refine` (the control for it) |
+| `--holdout-frac f --split-seed s` | draw episodes only from the episodes `train.py` held out with the same flags; a planner that trained on them is refused (default 0: every episode, the LeWM protocol) |
+| `--label NAME` | name of the planner config in the results file; `aggregate_results.py` pools runs with the same label |
 | `--goal-offset 25 --eval-budget 50 --num-eval 50 --seed 42` | the LeWM protocol |
 | `--results-json PATH` | every policy's metrics and per-episode successes, for sweeps over seeds |
 | `--deterministic` | deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower) |
@@ -117,8 +124,32 @@ Every policy has its own settings, so CEM always runs the LeWM paper configurati
 The table reports success, the LeWM cost of the executed plans (recomputed the same way for every
 solver; per replan in wandb / json), the largest executed |action| in z-scored units (values well
 above ~3 are outside LeWM's training data), and compute per replanning step as world-model passes:
-forward rollouts (`fwd/replan`) and backward passes (`bwd/replan`, `gflow-refine` only, each ~2x a
+forward rollouts (`fwd/replan`) and backward passes (`bwd/replan`, refine policies only, each ~2x a
 forward). The pairwise lines count episodes solved by both / only one / neither policy.
+
+### Paper protocol
+
+Hold evaluation episodes out of training, decay the learning rates, train several seeds, evaluate
+each on several episode sets, and pool:
+
+```bash
+for s in 0 1 2; do
+  python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt \
+      --holdout-frac 0.1 --split-seed 0 --lr-schedule cosine --seed $s --beta 192 --n-batches 60000 \
+      --n-components 7 --ls-steps 10 --ls-every 10 --ls-start 30000 --beta-warmup 30000 --out outputs/pusht-s$s
+  for e in 42 43 44 45; do
+    python scripts/evaluate.py --task pusht --holdout-frac 0.1 --split-seed 0 --seed $e \
+        --policy gflow gflow-refine prior-refine cem --planner outputs/pusht-s$s.pt --label pusht-mog7-mala \
+        --results-json results/pusht-s$s-e$e.json
+  done
+done
+python scripts/aggregate_results.py results/pusht-*.json --csv results/pusht.csv
+
+# baselines with the same network, data and split: behavior cloning on the expert actions, and
+# amortized MAP planning (one plan per condition; evaluate it with --gflow-select mean)
+python scripts/train.py ... --method bc --out outputs/pusht-bc
+python scripts/train.py ... --method map --beta 192 --out outputs/pusht-map
+```
 
 ### Experiments
 
@@ -158,8 +189,8 @@ python scripts/export_planner.py outputs/pusht
 ## Tests
 
 ```bash
-pytest                    # everything, ~8 min on CPU
-pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~1.5 min
+pytest                    # everything, ~11 min on CPU
+pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~2.5 min
 ruff check .              # pyflakes + import order
 ```
 
