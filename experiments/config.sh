@@ -23,12 +23,14 @@ case $TASK in
     : "${WM:=tworoom/lewm}"
     : "${BETA:=90}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 1000 --n-batches 20000}"
+    : "${ABLATION_BETAS:=60 120 192}"
     ;;
   pusht)
     : "${DATASET:=pusht_expert_train}"
     : "${WM:=pusht/lewm}"
     : "${BETA:=192}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 30000 --n-batches 60000 --n-components 7 --ls-steps 10 --ls-every 10 --ls-start 30000}"
+    : "${ABLATION_BETAS:=90 120 300}"
     ;;
   *) echo "unknown task: $TASK (tworoom or pusht)" >&2; exit 1 ;;
 esac
@@ -36,9 +38,9 @@ esac
 : "${BASELINE_BATCHES:=20000}"               # bc / map converge faster than the GFlowNet
 : "${REFINE:=--refine-steps 20 --refine-objective target --refine-beta $BETA}"   # gflow-refine and prior-refine
 
-# ablations (ABLATIONS=1 in train.sh / eval.sh): 2 seeds, one change to the GFlowNet each
+# ablations (ABLATIONS=1 in train.sh / eval.sh): 2 seeds, one change to the GFlowNet each;
+# ABLATION_BETAS (per task above) are the other betas, the main one is the reference
 : "${ABLATION_SEEDS:=0 1}"
-: "${ABLATION_BETAS:=90 120 300}"            # the main beta is the reference
 
 TRAIN_ARGS="--dataset $DATASET --ckpt $CKPT --goal-offset 25 --grad-clip 10 --lr-schedule cosine $SPLIT --wandb-mode $WANDB_MODE"
 EVAL_ARGS="--task $TASK --dataset $DATASET --wm $WM --num-eval $NUM_EVAL $SPLIT --wandb-mode $WANDB_MODE $EXTRA_EVAL_ARGS"
@@ -47,9 +49,18 @@ ablations() {  # "name|extra train.py flags" for every ablation; later flags ove
   local b
   for b in $ABLATION_BETAS; do echo "gfn-beta$b|--beta $b"; done
   echo "gfn-vargrad|--loss vargrad"
-  echo "gfn-k1|--n-components 1"
-  echo "gfn-k4|--n-components 4"
-  echo "gfn-nomala|--ls-steps 0"
-  echo "gfn-k1-nomala|--n-components 1 --ls-steps 0"
   echo "gfn-constlr|--lr-schedule constant"
+  case $TASK in
+    pusht)    # main = 7 components + MALA: remove each, and both (with gfn: a 2 x 2 design)
+      echo "gfn-k1|--n-components 1"
+      echo "gfn-k4|--n-components 4"
+      echo "gfn-nomala|--ls-steps 0"
+      echo "gfn-k1-nomala|--n-components 1 --ls-steps 0"
+      ;;
+    tworoom)  # main = 1 Gaussian, no MALA: add each, and both (MALA after the beta warmup)
+      echo "gfn-k4|--n-components 4"
+      echo "gfn-mala|--ls-steps 10 --ls-every 10 --ls-start 1000"
+      echo "gfn-k4-mala|--n-components 4 --ls-steps 10 --ls-every 10 --ls-start 1000"
+      ;;
+  esac
 }
