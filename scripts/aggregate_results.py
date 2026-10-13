@@ -15,6 +15,7 @@ checkpoints against one CEM run reuses CEM's episodes, so read p as indicative t
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 from gplan.results import comparison_table, format_markdown, group_runs, load_runs
@@ -35,7 +36,7 @@ def main():
             writer = csv.DictWriter(f, fieldnames=keys)
             writer.writeheader()
             writer.writerows(rows)
-        print(f"wrote {args.csv}")
+        print(f"wrote {args.csv}", file=sys.stderr)  # stdout is the table only (redirect it to a .md)
 
 
 if __name__ == "__main__":

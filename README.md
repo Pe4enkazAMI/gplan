@@ -42,6 +42,7 @@ gplan/
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
 scripts/             convert_lewm, encode_dataset, train, export_planner, evaluate, aggregate_results,
                      probe_headroom
+experiments/         train.sh, eval.sh, tables.sh: the paper's runs and tables for one task (config.sh)
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
                      test_jax_optimum / test_jax_baselines (closed-form optima), test_results,
                      test_eval_e2e (evaluate.py on a tiny real swm setup), test_scripts (every CLI)
@@ -127,29 +128,33 @@ above ~3 are outside LeWM's training data), and compute per replanning step as w
 forward rollouts (`fwd/replan`) and backward passes (`bwd/replan`, refine policies only, each ~2x a
 forward). The pairwise lines count episodes solved by both / only one / neither policy.
 
-### Paper protocol
+### Paper protocol: `experiments/`
 
-Hold evaluation episodes out of training, decay the learning rates, train several seeds, evaluate
-each on several episode sets, and pool:
+Three scripts run everything the paper needs for one task, on the episodes held out of training
+(10% by default), with 3 training seeds and 4 evaluation seeds (50 episodes each). Both scripts
+skip what already exists, so they can be rerun after an interruption; settings live in
+`experiments/config.sh` and can be overridden from the environment (e.g. `SEEDS="0" EVAL_SEEDS="42"`).
 
 ```bash
-for s in 0 1 2; do
-  python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt \
-      --holdout-frac 0.1 --split-seed 0 --lr-schedule cosine --seed $s --beta 192 --n-batches 60000 \
-      --n-components 7 --ls-steps 10 --ls-every 10 --ls-start 30000 --beta-warmup 30000 --out outputs/pusht-s$s
-  for e in 42 43 44 45; do
-    python scripts/evaluate.py --task pusht --holdout-frac 0.1 --split-seed 0 --seed $e \
-        --policy gflow gflow-refine prior-refine cem --planner outputs/pusht-s$s.pt --label pusht-mog7-mala \
-        --results-json results/pusht-s$s-e$e.json
-  done
-done
-python scripts/aggregate_results.py results/pusht-*.json --csv results/pusht.csv
-
-# baselines with the same network, data and split: behavior cloning on the expert actions, and
-# amortized MAP planning (one plan per condition; evaluate it with --gflow-select mean)
-python scripts/train.py ... --method bc --out outputs/pusht-bc
-python scripts/train.py ... --method map --beta 192 --out outputs/pusht-map
+bash experiments/train.sh pusht      # GFlowNet, bc and map baselines -> outputs/pusht/<model>-s<seed>
+bash experiments/eval.sh pusht       # -> results/pusht/<experiment>/*.json
+bash experiments/tables.sh pusht     # -> results/pusht/tables/<experiment>.md / .csv, also printed
+ABLATIONS=1 bash experiments/train.sh pusht && ABLATIONS=1 bash experiments/eval.sh pusht   # + ablations
 ```
+
+| Table | Content |
+| --- | --- |
+| `main` | CEM (paper config), GFlow best-of-64 / mean plan / + refinement, bc, map, prior shooting, prior + refinement, random |
+| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps (GFlow and prior starts), CEM samples x iterations |
+| `goal_offset_10`, `goal_offset_50` | goals 10 / 50 steps away instead of 25 |
+| `budget_25` | one plan, no replanning |
+| `lewm_protocol` | CEM on every episode, comparable with the LeWM paper |
+| `ablations` | beta, VarGrad, mixture components, MALA, constant learning rate (`ABLATIONS=1`) |
+| probe | headroom of best-of-64 samples under gradient refinement (`results/<task>/probe/`) |
+
+Every row pools training seeds (same label) and evaluation seeds: success with a Wilson 95% interval
+and the spread across training seeds, plan cost, compute per replan, and a paired comparison with the
+paper's CEM on the same episodes (exact McNemar p).
 
 ### Experiments
 

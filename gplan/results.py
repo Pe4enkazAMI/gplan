@@ -111,7 +111,8 @@ def summarize(group):
     per_planner = [np.concatenate(v).mean() for v in by_planner.values()]
     mean_of = lambda k: float(np.mean([r["metrics"].get(k, np.nan) for r in group.results]))
     return {
-        "policy": group.policy, "label": group.label or "", "runs": len(group.results), "planners": len(by_planner),
+        "policy": group.policy, "label": group.label or "", "settings": settings_text(group.settings),
+        "runs": len(group.results), "planners": len(by_planner),
         "episodes": len(succ), "success": 100 * succ.mean(), "ci_low": 100 * lo, "ci_high": 100 * hi,
         "success_std_over_planners": 100 * float(np.std(per_planner, ddof=1)) if len(per_planner) > 1 else float("nan"),
         "plan_cost": mean_of("plan_cost"), "plans_per_replan": mean_of("plans_per_replan"),
@@ -141,21 +142,35 @@ def paired_with(group, reference):
             "p_mcnemar": mcnemar_exact(only_a, only_b)}
 
 
+def settings_text(settings):
+    """Short description of a policy's settings for tables, e.g. "samples=64 select=mean"."""
+    short = {"gflow_samples": "samples", "prior_samples": "samples", "cem_samples": "samples", "gflow_select": "select",
+             "refine_steps": "steps", "refine_lr": "lr", "refine_objective": "obj", "refine_beta": "beta",
+             "prior_var": "var", "cem_steps": "iters", "cem_topk": "topk"}
+    return " ".join(f"{short.get(k, k)}={v}" for k, v in settings.items() if v is not None)
+
+
 def comparison_table(groups, reference_policy="cem"):
     """One row per group: summary + paired comparison with the reference policy run on the same
-    evaluation settings (if any)."""
+    evaluation settings (if any). With several settings of the reference policy (e.g. a CEM compute
+    sweep), the one with the most world-model passes per replan (CEM: the paper's 300 x 30) is used."""
     rows = []
     for g in groups:
         row = summarize(g)
         refs = [r for r in groups if r.policy == reference_policy and r.common == g.common]
-        pair = paired_with(g, refs[0]) if refs and g.policy != reference_policy else None
+        refs.sort(key=lambda r: -summarize(r)["plans_per_replan"])
+        pair = paired_with(g, refs[0]) if refs and g is not refs[0] else None
         row.update(pair or {})
         rows.append(row)
-    return rows
+    # reference first, then learned planners by label, then the planner-free baselines; cheapest first
+    order = [reference_policy, "gflow", "gflow-refine", "prior", "prior-refine", "random"]
+    rank = lambda r: (order.index(r["policy"]) if r["policy"] in order else len(order), r["label"],
+                      r["plans_per_replan"] + 2 * r["backward_per_replan"], r["settings"])
+    return sorted(rows, key=rank)
 
 
 def format_markdown(rows, reference_policy="cem"):
-    header = ["policy", "label", "planners", "episodes", "success %", "95% CI", "plan cost", "fwd/replan",
+    header = ["policy", "label", "settings", "planners", "episodes", "success %", "95% CI", "plan cost", "fwd/replan",
               "bwd/replan", "solve s/ep", f"vs {reference_policy}: only this / only ref", "McNemar p"]
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for r in rows:
@@ -164,7 +179,7 @@ def format_markdown(rows, reference_policy="cem"):
         versus = f"{r['only_this']} / {r['only_reference']}" if "only_this" in r else ""
         p = f"{r['p_mcnemar']:.3g}" if "p_mcnemar" in r else ""
         lines.append("| " + " | ".join([
-            r["policy"], r["label"], str(r["planners"]), str(r["episodes"]), success,
+            r["policy"], r["label"], r["settings"], str(r["planners"]), str(r["episodes"]), success,
             f"{r['ci_low']:.1f}-{r['ci_high']:.1f}", f"{r['plan_cost']:.2f}", f"{r['plans_per_replan']:.0f}",
             f"{r['backward_per_replan']:.0f}", f"{r['solve_s_per_episode']:.3f}", versus, p]) + " |")
     return "\n".join(lines)

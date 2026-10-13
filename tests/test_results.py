@@ -72,5 +72,35 @@ def test_aggregate_script(tmp_path):
                           str(tmp_path / "t.csv")], capture_output=True, text=True, cwd=REPO,
                          env={"PYTHONPATH": str(REPO), "PATH": ""}, timeout=120)
     assert out.returncode == 0, out.stderr
-    assert "| gflow | x |" in out.stdout and "1 / 0" in out.stdout
+    assert "| gflow | x | samples=64 select=min-cost |" in out.stdout and "1 / 0" in out.stdout
+    assert "wrote" not in out.stdout  # stdout is only the table
     assert (tmp_path / "t.csv").read_text().startswith("policy,")
+
+
+def test_cem_with_the_most_compute_is_the_reference(tmp_path):
+    """In a CEM compute sweep, other policies are paired with the paper's CEM (most passes per replan),
+    and the cheaper CEM settings are themselves paired with it."""
+    weak, strong = [False, False, True, False], [True, True, True, False]
+    a = write_run(tmp_path / "weak.json", 42, None, {"cem": (weak, 90)})
+    run = json.loads(a.read_text())
+    run["args"]["cem_samples"] = 30
+    a.write_text(json.dumps(run))
+    b = write_run(tmp_path / "strong.json", 42, "p.pt", {"cem": (strong, 9000), "gflow": ([True] * 4, 64)})
+    rows = comparison_table(group_runs(load_runs([a, b])))
+    by = {(r["policy"], r["plans_per_replan"]): r for r in rows}
+    assert (by[("gflow", 64)]["only_this"], by[("gflow", 64)]["only_reference"]) == (1, 0)
+    assert (by[("cem", 90)]["only_this"], by[("cem", 90)]["only_reference"]) == (0, 2)
+    assert "only_this" not in by[("cem", 9000)]
+
+
+def test_rows_are_ordered_reference_first_then_by_label_and_compute(tmp_path):
+    a = write_run(tmp_path / "a.json", 42, "outputs/zeta.pt", {"random": ([False] * 4, 0), "gflow": ([True] * 4, 64),
+                                                               "cem": ([True] * 4, 9000)})
+    run = json.loads(a.read_text())
+    run["args"]["gflow_samples"] = 1
+    run["policies"]["gflow"]["plans_per_replan"] = 1
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps(run))
+    rows = comparison_table(group_runs(load_runs([a, b])))
+    assert [(r["policy"], r["plans_per_replan"]) for r in rows] == [("cem", 9000), ("gflow", 1), ("gflow", 64),
+                                                                     ("random", 0)]
