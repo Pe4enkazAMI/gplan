@@ -61,6 +61,15 @@ def mcnemar_exact(only_a, only_b):
     return min(1.0, 2 * tail)
 
 
+def policy_settings(policy, args):
+    """The flags that change what `policy` did in a run. GFlow with --gflow-select sample / mean
+    executes one plan, so --gflow-samples (recorded, but unused) is left out."""
+    settings = {k: args.get(k) for k in POLICY_ARGS.get(policy, ())}
+    if policy == "gflow" and settings.get("gflow_select") in ("sample", "mean"):
+        settings["gflow_samples"] = None
+    return settings
+
+
 def load_runs(paths):
     """Read results files; returns one record per (file, policy)."""
     records = []
@@ -73,7 +82,7 @@ def load_runs(paths):
                 "file": str(path), "policy": policy, "seed": args["seed"],
                 "label": (args.get("label") or Path(str(args.get("planner"))).stem) if learned else None,
                 "planner": args.get("planner") if learned else None,
-                "settings": {k: args.get(k) for k in POLICY_ARGS.get(policy, ())},
+                "settings": policy_settings(policy, args),
                 "common": {k: args.get(k) for k in COMMON},
                 "episodes": [tuple(e) for e in run.get("episodes", [])],
                 "successes": np.asarray(metrics["episode_successes"], dtype=bool),

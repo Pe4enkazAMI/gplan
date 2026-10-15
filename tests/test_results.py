@@ -65,6 +65,19 @@ def test_settings_and_eval_seeds_separate_or_pool_groups(tmp_path):
     assert len(group_runs(load_runs([a, c]))) == 2  # different CEM settings are different rows
 
 
+def test_single_plan_gflow_does_not_show_its_unused_sample_count(tmp_path):
+    """--gflow-select mean / sample executes one plan: --gflow-samples is not a setting of that row."""
+    a = write_run(tmp_path / "a.json", 42, "map.pt", {"gflow": ([True] * 4, 0)}, label="map")
+    run = json.loads(a.read_text())
+    run["args"].update(gflow_select="mean", gflow_samples=128)  # a different, unused sample count
+    b = tmp_path / "b.json"
+    b.write_text(json.dumps(run))
+    run["args"]["gflow_samples"] = 64
+    a.write_text(json.dumps(run))
+    rows = comparison_table(group_runs(load_runs([a, b])))
+    assert len(rows) == 1 and rows[0]["settings"] == "select=mean" and rows[0]["episodes"] == 4
+
+
 def test_aggregate_script(tmp_path):
     f = write_run(tmp_path / "r.json", 42, "outputs/x.pt", {"gflow": ([True, True, False, False], 64),
                                                            "cem": ([True, False, False, False], 9000)})
