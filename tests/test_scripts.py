@@ -64,7 +64,7 @@ def trained(home, latents, tmp_path_factory):
     out = tmp_path_factory.mktemp("outputs") / "run"
     run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"),
          "--n-components", "2", "--ls-steps", "2", "--ls-every", "2", "--n-batches", "4", "--batch-size", "4",
-         "--n-samples", "2", "--beta", "1", "--deterministic", "--holdout-frac", "0.34", "--lr-schedule", "cosine",
+         "--n-samples", "2", "--beta", "1", "--deterministic", "--holdout-frac", "0.34",
          "--wandb-mode", "disabled",
          "--out", str(out)], home)
     return out
@@ -97,7 +97,6 @@ def test_train_writes_all_three_checkpoint_files(trained):
                                     "action_dim": FRAMESKIP * ENV_ACTION_DIM, "n_components": 2}
     assert meta["train_args"]["ls_steps"] == 2 and meta["train_args"]["deterministic"] is True
     assert meta["train_args"]["holdout_frac"] == 0.34 and meta["train_args"]["split_seed"] == 0
-    assert meta["train_args"]["lr_schedule"] == "cosine"
 
 
 def test_export_planner_reproduces_the_training_export(trained, tmp_path):

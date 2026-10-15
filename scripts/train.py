@@ -29,7 +29,7 @@ from gplan.jax.baselines import bc_loss, map_loss, train_baseline
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
 from gplan.jax.policy import GPlaner
-from gplan.jax.train import init_key, linear_beta_schedule, lr_schedule, train, TrainConfig
+from gplan.jax.train import init_key, linear_beta_schedule, train, TrainConfig
 
 
 def parse_args():
@@ -59,9 +59,6 @@ def parse_args():
                    help="steps to anneal beta linearly from --beta-start to --beta (0 = constant beta)")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--lr-z", type=float, default=3e-3, help="learning rate of the log Z head (usually 10-100x --lr)")
-    p.add_argument("--lr-schedule", default="constant", choices=["constant", "cosine"],
-                   help="cosine: --lr and --lr-z decay to 0 over --n-batches, so the final weights settle instead "
-                        "of jittering around the optimum (recommended for final models)")
     p.add_argument("--grad-clip", type=float, default=10.0, help="max global grad L2 norm; <= 0 disables")
     p.add_argument("--ls-steps", type=int, default=0,
                    help="EXP MALA local search: MALA steps from each on-policy plan; the results are added to "
@@ -119,25 +116,23 @@ def main():
     wandb.define_metric("loss/total", summary="min")
     wandb.define_metric("cost/mean", summary="min")
 
-    lr = lr_schedule(args.lr, args.lr_schedule, args.n_batches)
     if args.method == "gfn":
         beta = linear_beta_schedule(args.beta / d, args.beta_start / d, args.beta_warmup)
         model, losses = train(model, cost_model, pairs.batches(args.n_batches, args.batch_size, args.seed), beta,
-                              cfg, lr=lr, lr_z=lr_schedule(args.lr_z, args.lr_schedule, args.n_batches),
-                              seed=args.seed, log_every=args.log_every)
+                              cfg, lr=args.lr, lr_z=args.lr_z, seed=args.seed, log_every=args.log_every)
     elif args.method == "bc":
         env_dim = pairs.actions.shape[1]
         assert args.goal_offset % args.n_steps == 0 and args.goal_offset // args.n_steps * env_dim == args.action_dim, (
             f"bc needs --goal-offset = --n-steps x frameskip (expert plan step = {args.action_dim} values "
             f"= frameskip x {env_dim}-d env actions)")
         batches = pairs.expert_batches(args.n_batches, args.batch_size, args.n_steps, args.seed)
-        model, losses = train_baseline(model, bc_loss, batches, lr=lr, grad_clip=args.grad_clip,
+        model, losses = train_baseline(model, bc_loss, batches, lr=args.lr, grad_clip=args.grad_clip,
                                        log_every=args.log_every)
     else:  # map: the final beta, no warmup
         loss_fn = partial(map_loss, cost_model=cost_model, beta=args.beta / d, reference_var=args.ref_var,
                           action_dim=args.action_dim)
         model, losses = train_baseline(model, loss_fn, pairs.batches(args.n_batches, args.batch_size, args.seed),
-                                       lr=lr, grad_clip=args.grad_clip, log_every=args.log_every)
+                                       lr=args.lr, grad_clip=args.grad_clip, log_every=args.log_every)
 
     checkpoint.save(args.out, model, model_kwargs, train_args=config)
     print(f"saved {args.out}.eqx / .json / .pt")

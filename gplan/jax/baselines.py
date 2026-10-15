@@ -20,7 +20,7 @@ import jax.numpy as jnp
 import wandb
 
 from gplan.jax.policy import rollout, step_log_probs
-from gplan.jax.train import make_optimizer, norm_stats, value_at
+from gplan.jax.train import make_optimizer, norm_stats
 
 
 def bc_loss(model, z_start, z_goal, plans):
@@ -67,7 +67,7 @@ def train_baseline(model, loss_fn, batches, lr=1e-3, grad_clip=0.0, log_every=10
         stats = {k: float(v) for k, v in jax.device_get(stats).items()}
         losses.append(float(loss))
         t_now = time.perf_counter()
-        stats.update({"loss/total": losses[-1], "optim/lr": value_at(lr, step), "time/step_s": t_now - t_prev})
+        stats.update({"loss/total": losses[-1], "optim/lr": lr, "time/step_s": t_now - t_prev})
         t_prev = t_now
         if wandb.run is not None:
             wandb.log(stats, step=step)

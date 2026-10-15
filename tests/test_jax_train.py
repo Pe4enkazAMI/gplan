@@ -19,7 +19,6 @@ from gplan.jax.convert import gplaner_to_torch, lewm_from_torch
 from gplan.jax.train import (
     init_key,
     linear_beta_schedule,
-    lr_schedule,
     make_optimizer,
     norm_stats,
     train,
@@ -37,11 +36,11 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     each action ~ N(0, 1 / (2 beta + 1 / s^2)) = N(0, 0.2), log Z = -(H / 2) log(1 + 2 beta s^2), for
     every one of the 64 conditions, with and without MALA plans in the batch (off-policy).
 
-    The learning rates decay to 0 (cosine): with a constant rate the last iterate keeps jittering
-    around the optimum (one variance in 384 ended 0.107 away on one machine). Tolerances are ~5x the
-    worst error over 8 seeds x 4 variants (calibration below); the analytic numbers are exact, see
-    tests/test_jax_optimum.py for the objective itself."""
-    beta, s2, H, steps = 2.0, 1.0, T * A, 3000
+    Constant learning rates (as in scripts/train.py): the last iterate keeps jittering around the
+    optimum, by about the learning rate, so the rates are low (3e-4 / 3e-3) and the run long (6000
+    steps). Tolerances are ~2.5x the worst error over 8 seeds x 4 variants (calibration below); the
+    analytic numbers are exact, see tests/test_jax_optimum.py for the objective itself."""
+    beta, s2, H, steps = 2.0, 1.0, T * A, 6000
     K = 1 if loss_type == "tb" else 8
     n_cond = 64 // K
     model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=init_key(0))  # scalar layout
@@ -49,8 +48,7 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))
     cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0,
                       ls_steps=ls_steps, ls_step_size=0.05)
-    lr, lr_z = (lr_schedule(peak, "cosine", steps) for peak in (1e-3, 1e-2))
-    model, losses = train(model, QuadraticCost(), [batch] * steps, beta, cfg, lr=lr, lr_z=lr_z, log_every=10**9)
+    model, losses = train(model, QuadraticCost(), [batch] * steps, beta, cfg, lr=3e-4, lr_z=3e-3, log_every=10**9)
 
     zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
     plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(jax.random.split(jax.random.key(1), len(zs)), zs, zg)
@@ -58,15 +56,14 @@ def test_train_converges_to_analytic_solution(loss_type, ls_steps):
     variances, log_z = np.asarray(dists.stds) ** 2, np.asarray(jax.vmap(model.log_Z)(zs, zg))
     target_var, target_log_z = 1 / (2 * beta + 1 / s2), -H / 2 * math.log(1 + 2 * beta * s2)  # 0.2, -4.83
 
-    # worst over 8 seeds x 4 variants (calibration): loss 3e-4, every |mean| 0.018, every |var - 0.2|
-    # 0.0095, |mean var - 0.2| 2e-4, every |log Z - target| 0.0016. (Dropping the prior term would give
-    # var 0.25 and log Z +1.35.)
-    assert np.mean(losses[-100:]) < 2e-3 < losses[0]
+    # worst over 8 seeds x 4 variants (calibration): last-100 loss 0.014, every |mean| 0.023, every
+    # |var - 0.2| 0.042, |mean var - 0.2| 0.0043, every |log Z - target| 0.028. (Dropping the prior
+    # term would give var 0.25 and log Z +1.35.)
+    assert np.mean(losses[-100:]) < 0.04 < losses[0]
     assert np.abs(np.asarray(dists.means)).max() < 0.05
-    assert np.abs(variances - target_var).max() < 0.05
-    assert abs(variances.mean() - target_var) < 2e-3
-    assert np.abs(log_z - target_log_z).max() < 0.01
-
+    assert np.abs(variances - target_var).max() < 0.1
+    assert abs(variances.mean() - target_var) < 0.01
+    assert np.abs(log_z - target_log_z).max() < 0.06
 
 @pytest.mark.parametrize("n_components", [1, 3])
 def test_train_with_lewm_then_export_to_torch(wm, tmp_path, n_components):
@@ -145,8 +142,3 @@ def test_gradient_clipping_and_its_stats():
     assert np.isclose(float(stats["grad_norm/global"]), raw / 4)
     assert float(norm_stats(model, grads, grad_clip=0.0)["grad_norm/global"]) == float(stats["grad_norm/global_raw"])
 
-
-def test_lr_schedule():
-    assert lr_schedule(1e-3, "constant", 100) == 1e-3
-    cosine = lr_schedule(1e-3, "cosine", 100)
-    np.testing.assert_allclose([float(cosine(s)) for s in (0, 50, 100)], [1e-3, 5e-4, 0.0], atol=1e-12)

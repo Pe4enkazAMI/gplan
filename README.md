@@ -130,27 +130,31 @@ forward). The pairwise lines count episodes solved by both / only one / neither 
 
 ### Paper protocol: `experiments/`
 
-Three scripts run everything the paper needs for one task, on the episodes held out of training
-(10% by default), with 3 training seeds and 4 evaluation seeds (50 episodes each). Both scripts
-skip what already exists, so they can be rerun after an interruption; settings live in
-`experiments/config.sh` and can be overridden from the environment (e.g. `SEEDS="0" EVAL_SEEDS="42"`).
+Three scripts run everything the paper needs for one task. Training uses the 90% of episodes not held
+out, constant learning rates, 3 seeds per model (ablations: 2); evaluation uses 4 eval seeds x 50
+episodes. Both scripts skip what already exists, so they can be rerun after an interruption. The models,
+MALA settings and ablations of each task are in `experiments/config.sh`.
 
 ```bash
-bash experiments/train.sh pusht      # GFlowNet, bc and map baselines -> outputs/pusht/<model>-s<seed>
-bash experiments/eval.sh pusht       # -> results/pusht/<experiment>/*.json
-bash experiments/tables.sh pusht     # -> results/pusht/tables/<experiment>.md / .csv, also printed
-ABLATIONS=1 bash experiments/train.sh pusht && ABLATIONS=1 bash experiments/eval.sh pusht   # + ablations
+bash experiments/train.sh tworoom    # -> outputs/tworoom/<model>-s<seed>.{eqx,json,pt}
+bash experiments/eval.sh tworoom     # -> results/tworoom/<experiment>/*.json
+bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md / .csv, also printed
 ```
+
+| Model | Trained as |
+| --- | --- |
+| `gfn` | the GFlowNet (TB) |
+| `gfn-mala` | the GFlowNet + MALA plans as off-policy data (from the end of the beta warmup) |
+| `bc` | behavior cloning on the expert actions (same network) |
+| `map` | amortized MAP planning through LeWM (same network, one plan per condition) |
+| ablations | TwoRoom: `gfn` at beta x 0.5 / x 2; PushT: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`) |
 
 | Table | Content |
 | --- | --- |
-| `main` | CEM (paper config), GFlow best-of-64 / mean plan / + refinement, bc, map, prior shooting, prior + refinement, random |
-| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps = 16 x 20, 64 x 5 / 20 / 50 (GFlow and prior starts), CEM samples x iterations |
-| `goal_offset_50` | goals 50 steps away instead of 25 (beyond the training offset) |
-| `budget_25` | one plan, no replanning |
-| `lewm_protocol` | CEM on every episode (first eval seed), a sanity check against the LeWM paper |
-| `ablations` | beta x 0.5 / x 2; PushT: mixture and MALA removed (2 x 2); TwoRoom: PushT's recipe (`ABLATIONS=1`, 2 seeds) |
-| probe | headroom of best-of-64 samples under gradient refinement (`results/<task>/probe/`) |
+| `heldout` | the main comparison on held-out episodes: CEM (LeWM paper config), prior (best of 64 random plans), prior-refine, and per model `gflow` (best of 64 samples; map: its single plan) and `gflow-refine` (+ 20 gradient steps through LeWM) |
+| `alldata` | the same on every episode (the LeWM paper's protocol, comparable with its CEM numbers) |
+| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps = 16 x 20, 64 x 5 / 20 / 50 (gfn, gfn-mala and prior starts), CEM samples x iterations |
+| `ablations` | the ablations next to `gfn` and `gfn-mala` (`ABLATIONS=0` skips them) |
 
 Every row pools training seeds (same label) and evaluation seeds: success with a Wilson 95% interval
 and the spread across training seeds, plan cost, compute per replan, and a paired comparison with the
