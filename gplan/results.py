@@ -62,11 +62,14 @@ def mcnemar_exact(only_a, only_b):
 
 
 def policy_settings(policy, args):
-    """The flags that change what `policy` did in a run. GFlow with --gflow-select sample / mean
-    executes one plan, so --gflow-samples (recorded, but unused) is left out."""
+    """The flags that change what `policy` did in a run. Recorded but unused flags are left out:
+    --gflow-samples when GFlow executes one plan (--gflow-select sample / mean), and --refine-beta
+    when refinement minimizes the cost alone (--refine-objective cost)."""
     settings = {k: args.get(k) for k in POLICY_ARGS.get(policy, ())}
     if policy == "gflow" and settings.get("gflow_select") in ("sample", "mean"):
         settings["gflow_samples"] = None
+    if settings.get("refine_objective") == "cost":
+        settings["refine_beta"] = None
     return settings
 
 

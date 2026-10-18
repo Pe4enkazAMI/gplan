@@ -8,6 +8,7 @@
 #                prior-refine   the same 64 plans + 20 gradient steps through LeWM
 #                gflow          best of 64 samples of gfn / gfn-mala / bc, and map's single plan
 #                gflow-refine   the same 64 samples + 20 gradient steps       (gfn / gfn-mala / bc)
+#              every *-refine policy twice: on beta J + |A|^2/2 (obj=target) and on J alone (obj=cost)
 #   alldata    the same on every episode (the LeWM paper's protocol; 90% of them were trained on)
 #   curve      success vs compute, held out: GFlow N = 1 ... 256, refinement N x steps, CEM grid
 #   ablations  each ablation's GFlowNet, gflow and gflow-refine, held out (ABLATIONS=0 skips them)
@@ -31,9 +32,11 @@ compare() {  # compare <dir> <episode pool flags>: every model and baseline on t
   local dir=$1 e s m; shift
   for e in $EVAL_SEEDS; do
     run "$dir/baselines-e$e.json" --seed "$e" "$@" --policy cem prior prior-refine $REFINE
+    run "$dir/baselines-refine-cost-e$e.json" --seed "$e" "$@" --policy prior-refine $REFINE_COST
     for s in $SEEDS; do
       for m in gfn gfn-mala bc; do
         run "$dir/$m-s$s-e$e.json" --seed "$e" "$@" $(planner "$m" "$s") --policy gflow gflow-refine $REFINE
+        run "$dir/$m-refine-cost-s$s-e$e.json" --seed "$e" "$@" $(planner "$m" "$s") --policy gflow-refine $REFINE_COST
       done
       run "$dir/map-s$s-e$e.json" --seed "$e" "$@" $(planner map "$s") --policy gflow --gflow-select mean
     done

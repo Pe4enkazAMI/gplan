@@ -78,6 +78,25 @@ def test_single_plan_gflow_does_not_show_its_unused_sample_count(tmp_path):
     assert len(rows) == 1 and rows[0]["settings"] == "select=mean" and rows[0]["episodes"] == 4
 
 
+def test_refine_objectives_are_separate_rows_and_cost_hides_beta(tmp_path):
+    """gflow-refine on beta J + |A|^2/2 and on J alone are two rows; --refine-beta is unused by the cost
+    objective, so it is not shown (and runs differing only in it are pooled)."""
+    refine = dict(refine_steps=20, refine_lr=0.05, refine_beta=None)
+    files = []
+    for name, objective, beta in (("t", "target", 192.0), ("c1", "cost", None), ("c2", "cost", 90.0)):
+        path = write_run(tmp_path / f"{name}.json", 42, "p.pt", {"gflow-refine": ([True] * 4, 1344)}, label="gfn")
+        run = json.loads(path.read_text())
+        run["args"].update(refine, refine_objective=objective, refine_beta=beta)
+        if name == "c2":
+            run["args"]["seed"] = 43
+            run["episodes"] = [[43, i] for i in range(4)]
+        path.write_text(json.dumps(run))
+        files.append(path)
+    rows = {r["settings"]: r for r in comparison_table(group_runs(load_runs(files)))}
+    assert set(rows) == {"samples=64 steps=20 lr=0.05 obj=target beta=192.0", "samples=64 steps=20 lr=0.05 obj=cost"}
+    assert rows["samples=64 steps=20 lr=0.05 obj=cost"]["episodes"] == 8  # both eval seeds of the cost objective pooled
+
+
 def test_aggregate_script(tmp_path):
     f = write_run(tmp_path / "r.json", 42, "outputs/x.pt", {"gflow": ([True, True, False, False], 64),
                                                            "cem": ([True, False, False, False], 9000)})

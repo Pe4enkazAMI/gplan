@@ -45,7 +45,9 @@ case $TASK in
 esac
 : "${CKPT:=$STABLEWM_HOME/${WM}_object.ckpt}"
 : "${BASELINE_BATCHES:=20000}"               # bc and map converge faster than the GFlowNet
-REFINE="--refine-steps 20 --refine-objective target --refine-beta $BETA"   # every *-refine policy
+# test-time refinement of the 64 sampled plans (*-refine policies), with two objectives:
+REFINE="--refine-steps 20 --refine-objective target --refine-beta $BETA"   # beta J + |A|^2/2 (the GFlowNet target)
+REFINE_COST="--refine-steps 20 --refine-objective cost"                   # J alone
 
 TRAIN_ARGS="--dataset $DATASET --ckpt $CKPT --goal-offset 25 --grad-clip 10 $SPLIT --wandb-mode $WANDB_MODE"
 EVAL_ARGS="--task $TASK --dataset $DATASET --wm $WM --num-eval $NUM_EVAL --wandb-mode $WANDB_MODE $EXTRA_EVAL_ARGS"

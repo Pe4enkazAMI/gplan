@@ -151,7 +151,7 @@ bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md
 
 | Table | Content |
 | --- | --- |
-| `heldout` | the main comparison on held-out episodes: CEM (LeWM paper config), prior (best of 64 random plans), prior-refine, and per model `gflow` (best of 64 samples; map: its single plan) and `gflow-refine` (+ 20 gradient steps through LeWM) |
+| `heldout` | the main comparison on held-out episodes: CEM (LeWM paper config), prior (best of 64 random plans), prior-refine, and per model `gflow` (best of 64 samples; map: its single plan) and `gflow-refine` (+ 20 gradient steps through LeWM); every refine policy twice, on βJ + ‖A‖²/2 (`obj=target`) and on J alone (`obj=cost`) |
 | `alldata` | the same on every episode (the LeWM paper's protocol, comparable with its CEM numbers) |
 | `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps = 16 x 20, 64 x 5 / 20 / 50 (gfn, gfn-mala and prior starts), CEM samples x iterations |
 | `ablations` | the ablations next to `gfn` and `gfn-mala` (`ABLATIONS=0` skips them) |
