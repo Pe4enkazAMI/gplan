@@ -15,6 +15,7 @@ and the dataset columns the env is reset from (gplan.torch.evaluation.TASKS[task
 """
 
 import argparse
+import importlib.util
 import shutil
 import tarfile
 from pathlib import Path
@@ -108,6 +109,9 @@ def main():
         print(check_dataset(target, task))
         return
 
+    missing = [m for m in ("huggingface_hub", "zstandard") if importlib.util.find_spec(m) is None]
+    if missing:  # check before a download of tens of GB, not after
+        raise SystemExit(f"missing {missing}: pip install -e '.[convert]'")
     from huggingface_hub import hf_hub_download, list_repo_files
 
     repo = DATASET_REPOS[args.task]
