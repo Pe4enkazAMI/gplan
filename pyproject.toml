@@ -25,9 +25,18 @@ eval = [
     "gymnasium>=1.0",       # stable-worldmodel needs >=1.0 (0.29.x fails to import)
     "imageio",              # only for --video-dir
 ]
-convert = [
+# Reacher (DMControl) and Cube (OGBench): MuJoCo simulation, rendered offscreen with EGL on Linux.
+# dm_control pulls in labmaze, which has no wheel for Python >= 3.13 and is not needed here; on 3.13
+# install dm_control with --no-deps (see README).
+mujoco = [
+    "mujoco==3.16.0",
+    "dm_control==1.0.49",
+    "ogbench==1.2.1",
+]
+convert = [   # LeWM weights (convert_lewm.py) and datasets (download_data.py) from the Hugging Face Hub
     "huggingface_hub==0.36.2",
     "transformers==4.37.2",
+    "zstandard==0.25.0",
 ]
 test = ["pytest>=7.4", "ruff"]
 # JAX training. `jax` = CPU (any OS, enough for the tests); `jax-cuda` = NVIDIA GPU with CUDA 13

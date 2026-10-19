@@ -1,4 +1,4 @@
-"""Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom or PushT.
+"""Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom, PushT, Reacher or Cube.
 
     # head-to-head, one wandb run with a comparison table (CEM always uses its paper settings
     # unless --cem-* says otherwise)
@@ -26,7 +26,8 @@ Protocol details: gplan/torch/evaluation.py.
 Each policy has its own settings (--gflow-*, --refine-*, --cem-*), so CEM runs with the
 same configuration whatever GFlow checkpoint or flags are evaluated next to it.
 
---task picks the env, dataset, LeWM checkpoint and reset keys (gplan.torch.evaluation.TASKS);
+--task picks the env (and its settings), dataset, LeWM checkpoint and reset calls
+(gplan.torch.evaluation.TASKS);
 --env / --dataset / --wm override single fields.
 """
 
@@ -54,7 +55,7 @@ from gplan.torch.lewm import embed_dim
 from gplan.torch.policy import load_planner
 
 
-def parse_args():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--policy", nargs="+", action="extend",
                    choices=["gflow", "gflow-refine", "cem", "prior", "prior-refine", "random"],
@@ -104,7 +105,7 @@ def parse_args():
     p.add_argument("--wandb-project", default="gplan")
     p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
     p.add_argument("--wandb-name", default=None)
-    args = p.parse_args()
+    args = p.parse_args(argv)
     args.policy = list(dict.fromkeys(args.policy or ["gflow", "cem"]))  # keep the order, drop repeats
     task = TASKS[args.task]
     args.wm = args.wm or task.wm
@@ -117,7 +118,8 @@ def check_planner_matches(planner, train_args, args, env_action_dim):
     """Warn about train/eval protocol mismatches and assert the plan layout fits the env."""
     if train_args is not None:
         wandb.config.update({"planner_train_args": train_args})
-        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon), ("dataset", args.dataset)):
+        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon), ("dataset", args.dataset),
+                          ("frameskip", args.action_block)):
             if k in train_args and train_args[k] != eval_v:
                 print(f"WARNING: planner was trained with {k}={train_args[k]} but eval uses {eval_v}")
         eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()

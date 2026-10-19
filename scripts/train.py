@@ -32,6 +32,19 @@ from gplan.jax.policy import GPlaner
 from gplan.jax.train import init_key, linear_beta_schedule, train, TrainConfig
 
 
+def plan_step_dim(frameskip, env_action_dim, cost_model):
+    """Values per plan step: frameskip x the env's action dim (TwoRoom, PushT, Reacher: 5 x 2 = 10;
+    Cube: 5 x 5 = 25), checked against the input of LeWM's action encoder so a dataset / checkpoint
+    mismatch fails here instead of training on a world model that reads the actions differently."""
+    action_dim = frameskip * env_action_dim
+    lewm_dim = cost_model.action_encoder.patch_embed.in_features
+    if action_dim != lewm_dim:
+        raise SystemExit(f"a plan step is --frameskip {frameskip} x {env_action_dim}-d dataset actions = {action_dim} "
+                         f"values, but the LeWM checkpoint's action encoder takes {lewm_dim}: wrong --dataset / "
+                         f"--ckpt pair or --frameskip?")
+    return action_dim
+
+
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--method", default="gfn", choices=["gfn", "bc", "map"],
@@ -47,7 +60,9 @@ def parse_args():
                         "evaluate.py --holdout-frac / --split-seed can test on unseen episodes (0 = train on all)")
     p.add_argument("--split-seed", type=int, default=0, help="seed of the episode split")
     p.add_argument("--n-steps", type=int, default=5, help="planning horizon T")
-    p.add_argument("--action-dim", type=int, default=10, help="frameskip * env action dim")
+    p.add_argument("--frameskip", type=int, default=5,
+                   help="env steps per plan step: a plan step holds frameskip x the dataset's action dim values, "
+                        "which must be the input size of LeWM's action encoder")
     p.add_argument("--n-components", type=int, default=1,
                    help="EXP mixture policy: Gaussians per plan step (1 = a single diagonal Gaussian)")
     p.add_argument("--loss", default="tb", choices=["vargrad", "tb"])
@@ -100,6 +115,7 @@ def main():
         pairs.keep_episodes(train_eps)
         print(f"training on {len(train_eps)} episodes, {len(held_out)} held out for evaluation")
     d = pairs.embed_dim
+    args.action_dim = plan_step_dim(args.frameskip, pairs.actions.shape[1], cost_model)  # recorded in train_args
     model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
                         n_components=args.n_components)
     model = GPlaner(**model_kwargs, key=init_key(args.seed))
@@ -122,9 +138,9 @@ def main():
                               cfg, lr=args.lr, lr_z=args.lr_z, seed=args.seed, log_every=args.log_every)
     elif args.method == "bc":
         env_dim = pairs.actions.shape[1]
-        assert args.goal_offset % args.n_steps == 0 and args.goal_offset // args.n_steps * env_dim == args.action_dim, (
-            f"bc needs --goal-offset = --n-steps x frameskip (expert plan step = {args.action_dim} values "
-            f"= frameskip x {env_dim}-d env actions)")
+        assert args.goal_offset == args.n_steps * args.frameskip, (
+            f"bc needs --goal-offset = --n-steps x --frameskip (the expert plan is the {args.goal_offset} dataset "
+            f"actions between start and goal, {args.frameskip} {env_dim}-d actions per plan step)")
         batches = pairs.expert_batches(args.n_batches, args.batch_size, args.n_steps, args.seed)
         model, losses = train_baseline(model, bc_loss, batches, lr=args.lr, grad_clip=args.grad_clip,
                                        log_every=args.log_every)

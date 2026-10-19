@@ -36,18 +36,23 @@ def script(name):
 def home(tmp_path_factory):
     """$STABLEWM_HOME with a raw toy dataset (3 episodes of 40 frames) and a tiny LeWM checkpoint."""
     home = tmp_path_factory.mktemp("stablewm_home")
-    rng = np.random.default_rng(0)
-    n_eps, ep_len = 3, 40
-    with h5py.File(home / "toy.h5", "w") as h5:
-        h5["pixels"] = rng.integers(0, 256, size=(n_eps * ep_len, IMG, IMG, 3), dtype=np.uint8)
-        h5["ep_idx"] = np.repeat(np.arange(n_eps), ep_len)
-        h5["step_idx"] = np.tile(np.arange(ep_len), n_eps)
-        h5["action"] = rng.normal(size=(n_eps * ep_len, ENV_ACTION_DIM)).astype(np.float32)
+    write_toy_dataset(home / "toy.h5", ENV_ACTION_DIM)
     (home / "toy").mkdir()
     wm = make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16,
                  action_dim=ENV_ACTION_DIM * FRAMESKIP)
     torch.save(wm, home / "toy" / "lewm_object.ckpt")
     return home
+
+
+def write_toy_dataset(path, env_action_dim, n_eps=3, ep_len=40, seed=0):
+    """A raw LeWM-format .h5: random 8x8 frames and actions, `n_eps` episodes of `ep_len` frames."""
+    rng = np.random.default_rng(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as h5:
+        h5["pixels"] = rng.integers(0, 256, size=(n_eps * ep_len, IMG, IMG, 3), dtype=np.uint8)
+        h5["ep_idx"] = np.repeat(np.arange(n_eps), ep_len)
+        h5["step_idx"] = np.tile(np.arange(ep_len), n_eps)
+        h5["action"] = rng.normal(size=(n_eps * ep_len, env_action_dim)).astype(np.float32)
 
 
 @pytest.fixture(scope="session")
@@ -78,6 +83,41 @@ def test_train_baselines(home, latents, tmp_path, method):
          "--out", str(out)], home)
     meta = json.loads(Path(f"{out}.json").read_text())
     assert meta["train_args"]["method"] == method and Path(f"{out}.pt").exists()
+
+
+@pytest.fixture(scope="session")
+def cube_like(home):
+    """A Cube-like dataset (5-d actions, in a subfolder like ogbench/...), a tiny LeWM whose action
+    encoder takes 5 x 5 = 25 values, and its latents. Returns the checkpoint path."""
+    write_toy_dataset(home / "ogbench" / "toy5.h5", 5)
+    (home / "toy25").mkdir()
+    ckpt = home / "toy25" / "lewm_object.ckpt"
+    torch.save(make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16, action_dim=25), ckpt)
+    run([script("encode_dataset.py"), "--dataset", "ogbench/toy5", "--ckpt", str(ckpt), "--img-size", str(IMG),
+         "--batch-size", "32", "--device", "cpu"], home)
+    return ckpt
+
+
+@pytest.mark.parametrize("method", ["gfn", "bc"])
+def test_train_infers_a_25_value_plan_step_from_5d_actions(home, cube_like, tmp_path, method):
+    """A plan step is frameskip 5 x 5 = 25 values, read from the data and matching the LeWM action
+    encoder; gfn (mixture + MALA) and bc train on it."""
+    out = tmp_path / method
+    extra = ["--n-components", "2", "--ls-steps", "2", "--ls-every", "2"] if method == "gfn" else []
+    run([script("train.py"), "--dataset", "ogbench/toy5", "--ckpt", str(cube_like), "--method", method,
+         "--n-batches", "3", "--batch-size", "4", "--n-samples", "2", "--beta", "1", "--wandb-mode", "disabled",
+         "--out", str(out), *extra], home)
+    meta = json.loads(Path(f"{out}.json").read_text())
+    assert meta["train_args"]["action_dim"] == 25 and meta["model_kwargs"]["horizon"] == 5 * 25
+
+
+def test_train_refuses_a_plan_step_the_lewm_cannot_read(home, cube_like, tmp_path):
+    """--frameskip 2 x 5-d actions = 10 values, but the LeWM action encoder takes 25: a clear error."""
+    env = {**os.environ, "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}", "STABLEWM_HOME": str(home)}
+    proc = subprocess.run([sys.executable, script("train.py"), "--dataset", "ogbench/toy5", "--ckpt", str(cube_like),
+                           "--frameskip", "2", "--n-batches", "1", "--wandb-mode", "disabled",
+                           "--out", str(tmp_path / "x")], env=env, capture_output=True, text=True, timeout=600)
+    assert proc.returncode != 0 and "action encoder takes 25" in proc.stdout + proc.stderr, proc.stderr[-2000:]
 
 
 def test_encode_dataset(home, latents):

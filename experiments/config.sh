@@ -2,7 +2,7 @@
 # overridden from the environment, e.g.:  SEEDS="0" EVAL_SEEDS="42" bash experiments/eval.sh tworoom
 set -euo pipefail
 
-TASK=${1:?usage: bash experiments/<train|eval|tables>.sh tworoom|pusht}
+TASK=${1:?usage: bash experiments/<train|eval|tables>.sh tworoom|pusht|reacher|cube}
 cd "$(dirname "${BASH_SOURCE[0]}")/.."                  # run from the repository root
 
 : "${STABLEWM_HOME:=$HOME/.stable_worldmodel}"; export STABLEWM_HOME
@@ -41,7 +41,27 @@ case $TASK in
       echo "gfn-mala-k1|$GFN_ARGS $MALA_ARGS --n-components 1"
     }
     ;;
-  *) echo "unknown task: $TASK (tworoom or pusht)" >&2; exit 1 ;;
+  reacher)  # random-policy data, 2-d actions; settings of TwoRoom
+    : "${DATASET:=dmc/reacher_random}" "${WM:=reacher/lewm}" "${BETA:=90}"
+    : "${GFN_ARGS:=--beta $BETA --beta-warmup 1000 --n-batches 20000}"
+    : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 1000}"
+    ablations() {  # temperature: half and twice the main beta
+      echo "gfn-beta45|$GFN_ARGS --beta 45"
+      echo "gfn-beta180|$GFN_ARGS --beta 180"
+    }
+    ;;
+  cube)  # expert data, 5-d actions (a plan step is 25 values); settings of PushT
+    : "${DATASET:=ogbench/cube_single_expert}" "${WM:=cube/lewm}" "${BETA:=192}"
+    : "${GFN_ARGS:=--beta $BETA --beta-warmup 30000 --n-batches 60000 --n-components 7}"
+    : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 30000}"
+    ablations() {  # temperature (of gfn-mala), and one Gaussian instead of the 7-component mixture
+      echo "gfn-mala-beta96|$GFN_ARGS $MALA_ARGS --beta 96"
+      echo "gfn-mala-beta384|$GFN_ARGS $MALA_ARGS --beta 384"
+      echo "gfn-k1|$GFN_ARGS --n-components 1"
+      echo "gfn-mala-k1|$GFN_ARGS $MALA_ARGS --n-components 1"
+    }
+    ;;
+  *) echo "unknown task: $TASK (tworoom, pusht, reacher or cube)" >&2; exit 1 ;;
 esac
 : "${CKPT:=$STABLEWM_HOME/${WM}_object.ckpt}"
 : "${BASELINE_BATCHES:=20000}"               # bc and map converge faster than the GFlowNet

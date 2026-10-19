@@ -27,7 +27,7 @@ gplan/
     distributions.py   DiagGaussianMixture (twin of gplan/jax/distributions.py)
     policy.py          GPlaner + Sampler used at evaluation, PriorSampler (baselines), checkpoint I/O
     solvers.py         GFlowNet best-of-N solver (+ test-time refinement), cost logging
-    evaluation.py      the LeWM protocol: TwoRoom / PushT presets, normalizers, start sampling
+    evaluation.py      the LeWM protocol: TwoRoom / PushT / Reacher / Cube presets, normalizers, start sampling
   jax/               JAX: training
     lewm.py            the LeWM predictor in Equinox and J (checked against PyTorch)
     distributions.py   DiagGaussianMixture, normal / reference log-probs
@@ -40,12 +40,13 @@ gplan/
     probe.py           headroom probe: gradient refinement of sampled plans through LeWM
     convert.py         weights PyTorch <-> Equinox (LeWM predictor, GPlaner)
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
-scripts/             convert_lewm, encode_dataset, train, export_planner, evaluate, aggregate_results,
-                     probe_headroom
+scripts/             convert_lewm, download_data, encode_dataset, train, export_planner, evaluate,
+                     aggregate_results, probe_headroom
 experiments/         train.sh, eval.sh, tables.sh: the paper's runs and tables for one task (config.sh)
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
                      test_jax_optimum / test_jax_baselines (closed-form optima), test_results,
-                     test_eval_e2e (evaluate.py on a tiny real swm setup), test_scripts (every CLI)
+                     test_eval_e2e (evaluate.py on tiny datasets recorded with the real envs, all four
+                     tasks), test_scripts (every CLI), test_download_data
 le-wm/               LeWM sources (git submodule)
 ```
 
@@ -58,11 +59,18 @@ The two subpackages are named after the framework they use; inside them `import 
 git clone --recurse-submodules https://github.com/Pe4enkazAMI/gplan.git
 cd gplan                                   # existing clone: git submodule update --init le-wm
 pip install -e ".[eval,convert,test,jax-cuda]"   # on a CPU-only / macOS machine: .[...,jax]
+pip install -e ".[mujoco]"                        # Reacher and Cube (MuJoCo, DMControl, OGBench)
 export STABLEWM_HOME=~/.stable_worldmodel  # datasets (*.h5), LeWM checkpoints and latents live here
 ```
 
 `le-wm` is a git submodule. Its `jepa.py` and `module.py` must be importable under those names
 because LeWM checkpoints are pickled `jepa.JEPA` objects; importing `gplan.torch.lewm` handles that.
+
+Reacher and Cube are MuJoCo envs, rendered offscreen. On Linux evaluation sets `MUJOCO_GL=egl`
+(as `le-wm/eval.py` does), which needs the NVIDIA EGL driver (present on a GPU machine); set
+`MUJOCO_GL=osmesa` yourself for CPU-only rendering. `dm_control` depends on `labmaze`, which has no
+wheel for Python >= 3.13 and is not used here: on 3.13 install with
+`pip install mujoco==3.16.0 && pip install --no-deps dm_control==1.0.49 ogbench==1.2.1 && pip install absl-py dm-env dm-tree glfw lxml pyopengl pyparsing scipy`.
 
 ### DGX Spark / GB10
 
@@ -104,6 +112,34 @@ python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht
 python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
 ```
 
+### Reacher and Cube
+
+Same steps; `download_data.py` fetches the dataset archive from the LeWM collection on the Hugging
+Face Hub, unpacks it to where the presets expect it and checks its columns (Reacher 24 GB, Cube 46 GB
+to download, about as much again while unpacking; the archive is deleted afterwards).
+
+| task | env | dataset | LeWM weights | actions (plan step) |
+| --- | --- | --- | --- | --- |
+| `reacher` | `swm/ReacherDMControl-v0`, joint-angle goal | `dmc/reacher_random` (random policy) | `quentinll/lewm-reacher` | 2-d (10) |
+| `cube` | `swm/OGBCube-v0`, one cube, pose goal | `ogbench/cube_single_expert` | `quentinll/lewm-cube` | 5-d (25) |
+
+```bash
+python scripts/convert_lewm.py --repo quentinll/lewm-reacher --name reacher/lewm
+python scripts/download_data.py --task reacher            # -> $STABLEWM_HOME/dmc/reacher_random.h5
+python scripts/encode_dataset.py --dataset dmc/reacher_random --ckpt $STABLEWM_HOME/reacher/lewm_object.ckpt
+python scripts/evaluate.py --task reacher --policy cem --num-eval 2   # quick check of the env and data
+
+python scripts/convert_lewm.py --repo quentinll/lewm-cube --name cube/lewm
+python scripts/download_data.py --task cube               # -> $STABLEWM_HOME/ogbench/cube_single_expert.h5
+python scripts/encode_dataset.py --dataset ogbench/cube_single_expert --ckpt $STABLEWM_HOME/cube/lewm_object.ckpt
+python scripts/evaluate.py --task cube --policy cem --num-eval 2
+```
+
+`train.py` reads the plan-step size from the data (`--frameskip` 5 x the dataset's action dim) and
+stops if LeWM's action encoder expects another size. The experiment scripts take `reacher` / `cube`
+like the other tasks (`bash experiments/train.sh cube`); Reacher starts from TwoRoom's GFlowNet
+settings and Cube from PushT's (`experiments/config.sh`).
+
 ### Evaluation
 
 Every policy has its own settings, so CEM always runs the LeWM paper configuration
@@ -136,7 +172,7 @@ episodes. Both scripts skip what already exists, so they can be rerun after an i
 MALA settings and ablations of each task are in `experiments/config.sh`.
 
 ```bash
-bash experiments/train.sh tworoom    # -> outputs/tworoom/<model>-s<seed>.{eqx,json,pt}
+bash experiments/train.sh tworoom    # -> outputs/tworoom/<model>-s<seed>.{eqx,json,pt}; also pusht, reacher, cube
 bash experiments/eval.sh tworoom     # -> results/tworoom/<experiment>/*.json
 bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md / .csv, also printed
 ```
@@ -147,7 +183,7 @@ bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md
 | `gfn-mala` | the GFlowNet + MALA plans as off-policy data (from the end of the beta warmup) |
 | `bc` | behavior cloning on the expert actions (same network) |
 | `map` | amortized MAP planning through LeWM (same network, one plan per condition) |
-| ablations | TwoRoom: `gfn` at beta x 0.5 / x 2; PushT: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`) |
+| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`) |
 
 | Table | Content |
 | --- | --- |
@@ -198,7 +234,7 @@ python scripts/export_planner.py outputs/pusht
 ## Tests
 
 ```bash
-pytest                    # everything, ~11 min on CPU
+pytest                    # everything, ~16 min on CPU (Reacher / Cube tests need the [mujoco] extra, else skipped)
 pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~2.5 min
 ruff check .              # pyflakes + import order
 ```

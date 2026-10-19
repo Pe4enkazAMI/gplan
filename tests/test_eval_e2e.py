@@ -8,10 +8,13 @@ not depend on anything GFlow-related.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import types
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 import torch
@@ -20,6 +23,8 @@ from conftest import make_wm
 swm = pytest.importorskip("stable_worldmodel")
 from gplan.data import episode_column, split_episodes  # noqa: E402
 from gplan.results import comparison_table, group_runs, load_runs  # noqa: E402
+from gplan.torch.evaluation import evaluate as run_protocol  # noqa: E402
+from gplan.torch.evaluation import sample_eval_starts, TASKS  # noqa: E402
 from gplan.torch.policy import GPlaner, save_planner  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
@@ -27,8 +32,10 @@ pytestmark = pytest.mark.slow
 EMBED, ACTION_DIM = 16, 10  # 10 = frameskip 5 x 2-d env actions
 
 
-def record(env_name, dataset, home, episodes=6, steps=60):
-    world = swm.World(env_name=env_name, num_envs=2, image_shape=(224, 224), max_episode_steps=steps, verbose=0)
+def record(env_name, dataset, home, episodes=6, steps=60, **world_kwargs):
+    (home / dataset).parent.mkdir(parents=True, exist_ok=True)
+    world = swm.World(env_name=env_name, num_envs=2, image_shape=(224, 224), max_episode_steps=steps, verbose=0,
+                      **world_kwargs)
     world.set_policy(swm.policy.RandomPolicy(seed=0))
     world.record_dataset(dataset, episodes=episodes, seed=0, cache_dir=home)
     world.close()
@@ -53,12 +60,13 @@ def home(tmp_path_factory):
     return home
 
 
-def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom", full=False, expect_failure=False):
+def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom", wm="toy/lewm", full=False,
+             expect_failure=False):
     """Run scripts/evaluate.py in a fresh process (as on the cluster); returns the policies of the
     --results-json (the whole file with full=True, the console output with expect_failure=True)."""
     out = tmp_path / f"results_{len(list(tmp_path.glob('results_*')))}.json"
     env = {**os.environ, "STABLEWM_HOME": str(home), "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}"}
-    cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), "--task", task, "--wm", "toy/lewm",
+    cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), "--task", task, "--wm", wm,
            "--dataset", dataset, "--num-eval", "4", "--img-size", "8", "--device", "cpu",
            "--wandb-mode", "disabled", "--results-json", str(out), *args]
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
@@ -141,3 +149,88 @@ def test_held_out_evaluation_uses_only_unseen_episodes(home, tmp_path):
     out = evaluate(home, tmp_path, "--policy", "gflow", "--planner", str(home / "gauss_split.pt"),
                    "--holdout-frac", "0.5", "--split-seed", "1", expect_failure=True)  # a different split
     assert "were in the planner's training data" in out
+
+
+# ---------------------------------------------------------------------------- MuJoCo tasks (Reacher, Cube)
+
+MUJOCO = {  # task: (toy dataset, env action dim)
+    "reacher": ("dmc/toy_reacher", 2),
+    "cube": ("ogbench/toy_cube", 5),
+}
+
+
+@pytest.fixture(scope="session")
+def mujoco_home(tmp_path_factory):
+    """Toy Reacher and Cube datasets recorded with the real envs (random actions, so the cube rarely
+    moves), tiny LeWMs whose action encoders take 5 x 2 and 5 x 5 values, and untrained planners."""
+    for module in ("mujoco", "dm_control", "ogbench"):
+        pytest.importorskip(module)
+    home = tmp_path_factory.mktemp("stablewm_home_mujoco")
+    for name, (dataset, env_dim) in MUJOCO.items():
+        task = TASKS[name]
+        record(task.env, dataset, home, episodes=4, steps=40, **task.world_kwargs)
+        (home / f"toy_{name}").mkdir()
+        torch.save(make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16, action_dim=5 * env_dim),
+                   home / f"toy_{name}" / "lewm_object.ckpt")
+        torch.manual_seed(0)
+        kwargs = dict(state_dim=EMBED, horizon=5 * 5 * env_dim, action_dim=5 * env_dim, n_components=2)
+        save_planner(home / f"{name}.pt", GPlaner(**kwargs), kwargs, train_args={"beta": 90.0})
+    return home
+
+
+class Replay(swm.policy.BasePolicy):
+    """Executes given env actions, one row per env and step (then zeros)."""
+
+    def __init__(self, actions):
+        super().__init__()
+        self.actions, self.t = actions, 0  # (n_envs, steps, env action dim)
+
+    def get_action(self, obs, **kwargs):
+        a = self.actions[:, self.t] if self.t < self.actions.shape[1] else np.zeros_like(self.actions[:, 0])
+        self.t += 1
+        return a
+
+
+def replay_success(home, name, dataset_name, actions_of, n=4):
+    """Success of `Replay(actions_of(dataset actions from each start row))` under the task's protocol."""
+    task = TASKS[name]
+    dataset = swm.data.HDF5Dataset(dataset_name, keys_to_cache=list(task.cache_keys), cache_dir=home)
+    episodes, starts = sample_eval_starts(dataset, n, 25, seed=0)
+    ep_idx = dataset.get_col_data(episode_column(dataset.column_names))
+    step_idx, actions = dataset.get_col_data("step_idx"), dataset.get_col_data("action")
+    rows = [int(np.nonzero((ep_idx == e) & (step_idx == s))[0][0]) for e, s in zip(episodes, starts)]
+    plans = actions_of(np.stack([actions[r:r + 25] for r in rows]))
+    args = types.SimpleNamespace(env=task.env, num_eval=n, eval_budget=50, goal_offset=25, seed=0, video_dir=None)
+    return run_protocol("replay", Replay(plans), args, task, dataset, episodes, starts)["episode_successes"]
+
+
+def test_reacher_resets_to_the_dataset_state_and_goal(mujoco_home):
+    """Replaying the recorded actions from the dataset's start state reaches the dataset's goal (the
+    joint angles 25 steps later): every episode succeeds. Doing nothing reaches none of them."""
+    assert replay_success(mujoco_home, "reacher", "dmc/toy_reacher", lambda a: a).all()
+    assert not replay_success(mujoco_home, "reacher", "dmc/toy_reacher", np.zeros_like).any()
+
+
+def test_cube_resets_to_the_dataset_state_and_goal(mujoco_home, tmp_path):
+    """Random actions rarely move the cube, so in the toy data the goal pose is the start pose: doing
+    nothing succeeds only if the env is reset to the dataset's cube pose AND given the dataset's goal.
+    With the goal pose moved 10 cm in the data, doing nothing fails."""
+    assert replay_success(mujoco_home, "cube", "ogbench/toy_cube", np.zeros_like).all()
+    shutil.copytree(mujoco_home, tmp_path / "home")
+    with h5py.File(tmp_path / "home" / "ogbench" / "toy_cube.h5", "r+") as f:
+        f["privileged_block_0_pos"][:, 0] += 0.1
+    assert not replay_success(tmp_path / "home", "cube", "ogbench/toy_cube", np.zeros_like).any()
+
+
+@pytest.mark.parametrize("name", sorted(MUJOCO))
+def test_evaluate_runs_on_mujoco_tasks(mujoco_home, tmp_path, name):
+    """scripts/evaluate.py --task reacher / cube end to end: GFlow (an untrained planner of the right
+    plan size), CEM and random, with every reset call applied (no swm "skipping callable" fallback)."""
+    dataset, env_dim = MUJOCO[name]
+    res = evaluate(mujoco_home, tmp_path, "--policy", "gflow", "cem", "random", "--planner", str(mujoco_home / f"{name}.pt"),
+                   "--cem-samples", "16", "--cem-steps", "2", "--cem-topk", "4", "--num-eval", "2",  # 2 envs: faster
+                   task=name, dataset=dataset, wm=f"toy_{name}/lewm", full=True)
+    assert set(res["policies"]) == {"gflow", "cem", "random"} and len(res["episodes"]) == 2
+    for policy in ("gflow", "cem"):
+        m = res["policies"][policy]
+        assert np.isfinite(m["plan_cost"]) and m["replans"] == 2, policy  # budget 50 = 2 x 25 steps

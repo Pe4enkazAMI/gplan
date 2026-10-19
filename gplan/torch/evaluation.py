@@ -1,17 +1,21 @@
-"""LeWorldModel evaluation protocol (le-wm/eval.py with le-wm/config/eval/{tworoom,pusht}.yaml).
+"""LeWorldModel evaluation protocol (le-wm/eval.py with le-wm/config/eval/<task>.yaml).
 
-Start states and goals are taken from the expert dataset (goal = state
-`goal_offset` steps ahead), the agent has `eval_budget` env steps to reach it,
-and an episode is a success if the env terminates (TwoRoom: agent within 16 px
-of the target; PushT: block and agent within 20 px and block angle within 20 deg).
-Every policy is run on the *same* (episode, start step) pairs and env seeds, so
-success rates are directly comparable, and the pairs are drawn exactly as
-le-wm/eval.py draws them, so they match LeWM's reported CEM numbers.
+Start states and goals are taken from the dataset (goal = state `goal_offset` steps ahead), the
+agent has `eval_budget` env steps to reach it, and an episode is a success if the env terminates:
+    TwoRoom  agent within 16 px of the target
+    PushT    block and agent within 20 px, block angle within 20 deg
+    Reacher  arm joint angles match the goal's (DMControl reacher, task qpos_match)
+    Cube     the cube at the goal's position and orientation (OGBench cube, single cube)
+Every policy is run on the *same* (episode, start step) pairs and env seeds, so success rates are
+directly comparable, and the pairs are drawn exactly as le-wm/eval.py draws them, so they match
+LeWM's reported CEM numbers.
 """
 
+import copy
 import os
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -23,26 +27,57 @@ from gplan.torch.lewm import img_transform
 from gplan.torch.policy import PriorSampler, Sampler
 from gplan.torch.solvers import CostLoggingSolver, GFlowSolver
 
+# MuJoCo tasks (Reacher, Cube) render offscreen; on a headless Linux machine that needs EGL (as in
+# le-wm/eval.py). MuJoCo reads this when an env is first created, so setting it here is early enough.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("MUJOCO_GL", "egl")
+
+
+def call(method, **args):
+    """An env method swm calls at the start of every episode (a le-wm `eval.callables` entry). Each
+    argument is the dataset column passed to it (the goal row's columns are prefixed `goal_`), or
+    `fixed(value)` for a constant."""
+    return {"method": method, "args": {k: v if isinstance(v, dict) else {"value": v} for k, v in args.items()}}
+
+
+def fixed(value):
+    return {"value": value, "in_dataset": False}
+
 
 @dataclass(frozen=True)
 class Task:
     """Everything that differs between evaluation tasks (values from le-wm/config/eval/<task>.yaml)."""
     env: str                  # gymnasium id
-    dataset: str              # .h5 name under $STABLEWM_HOME
+    dataset: str              # .h5 name under $STABLEWM_HOME (may contain a folder, e.g. dmc/...)
     wm: str                   # LeWM checkpoint name under $STABLEWM_HOME
-    state_key: str            # dataset column the env is reset to (env._set_state)
-    goal_state_key: str       # column of the goal row passed to env._set_goal_state
+    resets: tuple             # `call(...)`s that put the env in the start state and set its goal
     cache_keys: tuple         # dataset columns kept in memory; each also gets a normalizer
+    world_kwargs: dict = field(default_factory=dict)  # extra swm.World / env arguments (le-wm `world:`)
 
 
 TASKS = {
     # TwoRoom: proprio = agent position, which is the whole state
     "tworoom": Task(env="swm/TwoRoom-v1", dataset="tworoom", wm="tworoom/lewm",
-                    state_key="proprio", goal_state_key="goal_proprio", cache_keys=("action", "proprio")),
+                    resets=(call("_set_state", state="proprio"), call("_set_goal_state", goal_state="goal_proprio")),
+                    cache_keys=("action", "proprio")),
     # PushT: proprio is only the agent (position, velocity); the reset needs the full state
     # (agent position, block position and angle, velocity) and success is judged on it
     "pusht": Task(env="swm/PushT-v1", dataset="pusht_expert_train", wm="pusht/lewm",
-                  state_key="state", goal_state_key="goal_state", cache_keys=("action", "proprio", "state")),
+                  resets=(call("_set_state", state="state"), call("_set_goal_state", goal_state="goal_state")),
+                  cache_keys=("action", "proprio", "state")),
+    # Reacher (DMControl, 2 joints): the goal is the joint configuration 25 steps later
+    "reacher": Task(env="swm/ReacherDMControl-v0", dataset="dmc/reacher_random", wm="reacher/lewm",
+                    resets=(call("set_state", qpos="qpos", qvel="qvel"),
+                            call("set_target_qpos", target_qpos="goal_qpos")),
+                    cache_keys=("action",), world_kwargs={"task": "qpos_match"}),
+    # Cube (OGBench, one cube, 5-d end-effector actions): the goal is the cube's pose 25 steps later
+    "cube": Task(env="swm/OGBCube-v0", dataset="ogbench/cube_single_expert", wm="cube/lewm",
+                 resets=(call("set_state", qpos="qpos", qvel="qvel"),
+                         call("set_target_pos", cube_id=fixed(0), target_pos="goal_privileged_block_0_pos",
+                              target_quat="goal_privileged_block_0_quat")),
+                 cache_keys=("action",),
+                 world_kwargs={"env_type": "single", "ob_type": "states", "multiview": False, "width": 224,
+                               "height": 224, "visualize_info": False, "terminate_at_goal": True}),
 }
 
 
@@ -167,6 +202,7 @@ def evaluate(name, policy, args, task, dataset, episodes, start_steps):
     world = swm.World(
         env_name=args.env, num_envs=args.num_eval, image_shape=(224, 224),
         max_episode_steps=max(2 * args.eval_budget, args.goal_offset),  # swm requires >= goal_offset
+        **task.world_kwargs,
     )
     world.set_policy(policy)
     t0 = time.time()
@@ -176,10 +212,7 @@ def evaluate(name, policy, args, task, dataset, episodes, start_steps):
         start_steps=start_steps,
         goal_offset_steps=args.goal_offset,
         eval_budget=args.eval_budget,
-        callables=[
-            {"method": "_set_state", "args": {"state": {"value": task.state_key}}},
-            {"method": "_set_goal_state", "args": {"goal_state": {"value": task.goal_state_key}}},
-        ],
+        callables=copy.deepcopy(list(task.resets)),
         save_video=args.video_dir is not None,
         video_path=str(Path(args.video_dir) / name) if args.video_dir else "./",
     )
