@@ -186,7 +186,7 @@ bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md
 | `map` | amortized MAP planning through LeWM (same network, one plan per condition) |
 | `ppo` | PPO (clipped surrogate, GAE, learned critic) maximizing the plan return −βJ + log N(A): a reward maximizer |
 | `ppo-maxent` | the same with the entropy term −log π in the reward (`--ent-coef 1`): its optimum is the GFlowNet target |
-| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`); every task: `ppo-cost`, PPO on −βJ alone |
+| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`); every task: `ppo-cost` / `ppo-cost-maxent`, PPO on −βJ alone (classic / with the entropy term) |
 
 | Table | Content |
 | --- | --- |
