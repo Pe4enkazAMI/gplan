@@ -6,8 +6,8 @@
 #                cem            the LeWM paper's planner (300 samples x 30 iterations)
 #                prior          best of 64 random plans from N(0, I)          (no learning)
 #                prior-refine   the same 64 plans + 20 gradient steps through LeWM
-#                gflow          best of 64 samples of gfn / gfn-mala / bc, and map's single plan
-#                gflow-refine   the same 64 samples + 20 gradient steps       (gfn / gfn-mala / bc)
+#                gflow          best of 64 samples of gfn / gfn-mala / bc / ppo / ppo-maxent, and map's single plan
+#                gflow-refine   the same 64 samples + 20 gradient steps       (all but map)
 #              every *-refine policy twice: on beta J + |A|^2/2 (obj=target) and on J alone (obj=cost)
 #   alldata    the same on every episode (the LeWM paper's protocol; 90% of them were trained on)
 #   curve      success vs compute, held out: GFlow N = 1 ... 256, refinement N x steps, CEM grid
@@ -34,7 +34,7 @@ compare() {  # compare <dir> <episode pool flags>: every model and baseline on t
     run "$dir/baselines-e$e.json" --seed "$e" "$@" --policy cem prior prior-refine $REFINE
     run "$dir/baselines-refine-cost-e$e.json" --seed "$e" "$@" --policy prior-refine $REFINE_COST
     for s in $SEEDS; do
-      for m in gfn gfn-mala bc; do
+      for m in gfn gfn-mala bc ppo ppo-maxent; do
         run "$dir/$m-s$s-e$e.json" --seed "$e" "$@" $(planner "$m" "$s") --policy gflow gflow-refine $REFINE
         run "$dir/$m-refine-cost-s$s-e$e.json" --seed "$e" "$@" $(planner "$m" "$s") --policy gflow-refine $REFINE_COST
       done

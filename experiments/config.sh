@@ -18,47 +18,56 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."                  # run from the repositor
 : "${EXTRA_EVAL_ARGS:=}"                     # e.g. "--device cuda" or "--deterministic"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false   # several processes in a row on the GB10's shared memory
 
-# Per task: the GFlowNet (GFN_ARGS), what MALA adds to it (MALA_ARGS, from the end of the beta warmup)
-# and the ablations, one "name|train.py flags" line each.
+# Per task: the GFlowNet (GFN_ARGS), what MALA adds to it (MALA_ARGS, from the end of the beta warmup),
+# PPO (PPO_ARGS: the same final beta, iterations and policy family; no warmup) and the ablations, one
+# "name|train.py flags" line each.
 case $TASK in
   tworoom)
     : "${DATASET:=tworoom}" "${WM:=tworoom/lewm}" "${BETA:=90}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 1000 --n-batches 20000}"
     : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 1000}"
-    ablations() {  # temperature: half and twice the main beta
+    : "${PPO_ARGS:=--method ppo --beta $BETA --n-batches 20000}"
+    ablations() {  # temperature: half and twice the main beta; PPO on the cost alone
       echo "gfn-beta45|$GFN_ARGS --beta 45"
       echo "gfn-beta180|$GFN_ARGS --beta 180"
+      echo "ppo-cost|$PPO_ARGS --ppo-reward cost"
     }
     ;;
   pusht)
     : "${DATASET:=pusht_expert_train}" "${WM:=pusht/lewm}" "${BETA:=192}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 30000 --n-batches 60000 --n-components 7}"
     : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 30000}"
-    ablations() {  # temperature (of gfn-mala), and one Gaussian instead of the 7-component mixture
+    : "${PPO_ARGS:=--method ppo --beta $BETA --n-batches 60000 --n-components 7}"
+    ablations() {  # temperature (of gfn-mala), one Gaussian instead of the 7-component mixture, PPO on the cost
       echo "gfn-mala-beta96|$GFN_ARGS $MALA_ARGS --beta 96"
       echo "gfn-mala-beta384|$GFN_ARGS $MALA_ARGS --beta 384"
       echo "gfn-k1|$GFN_ARGS --n-components 1"
       echo "gfn-mala-k1|$GFN_ARGS $MALA_ARGS --n-components 1"
+      echo "ppo-cost|$PPO_ARGS --ppo-reward cost"
     }
     ;;
   reacher)  # random-policy data, 2-d actions; settings of TwoRoom
     : "${DATASET:=dmc/reacher_random}" "${WM:=reacher/lewm}" "${BETA:=90}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 1000 --n-batches 20000}"
     : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 1000}"
-    ablations() {  # temperature: half and twice the main beta
+    : "${PPO_ARGS:=--method ppo --beta $BETA --n-batches 20000}"
+    ablations() {  # temperature: half and twice the main beta; PPO on the cost alone
       echo "gfn-beta45|$GFN_ARGS --beta 45"
       echo "gfn-beta180|$GFN_ARGS --beta 180"
+      echo "ppo-cost|$PPO_ARGS --ppo-reward cost"
     }
     ;;
   cube)  # expert data, 5-d actions (a plan step is 25 values); settings of PushT
     : "${DATASET:=ogbench/cube_single_expert}" "${WM:=cube/lewm}" "${BETA:=192}"
     : "${GFN_ARGS:=--beta $BETA --beta-warmup 30000 --n-batches 60000 --n-components 7}"
     : "${MALA_ARGS:=--ls-steps 10 --ls-every 10 --ls-start 30000}"
-    ablations() {  # temperature (of gfn-mala), and one Gaussian instead of the 7-component mixture
+    : "${PPO_ARGS:=--method ppo --beta $BETA --n-batches 60000 --n-components 7}"
+    ablations() {  # temperature (of gfn-mala), one Gaussian instead of the 7-component mixture, PPO on the cost
       echo "gfn-mala-beta96|$GFN_ARGS $MALA_ARGS --beta 96"
       echo "gfn-mala-beta384|$GFN_ARGS $MALA_ARGS --beta 384"
       echo "gfn-k1|$GFN_ARGS --n-components 1"
       echo "gfn-mala-k1|$GFN_ARGS $MALA_ARGS --n-components 1"
+      echo "ppo-cost|$PPO_ARGS --ppo-reward cost"
     }
     ;;
   *) echo "unknown task: $TASK (tworoom, pusht, reacher or cube)" >&2; exit 1 ;;

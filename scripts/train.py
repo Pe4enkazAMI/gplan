@@ -1,6 +1,7 @@
 """Train the GPlaner sampler (JAX) as a conditional GFlowNet over LeWM action plans (--method gfn),
-or the same network as a baseline: behavior cloning on the dataset's expert actions (--method bc) or
-amortized MAP planning through LeWM (--method map; evaluate with --gflow-select mean).
+or the same network as a baseline: behavior cloning on the dataset's expert actions (--method bc),
+amortized MAP planning through LeWM (--method map; evaluate with --gflow-select mean) or PPO with a
+learned critic (--method ppo, gplan/jax/ppo.py).
 
 Needs precomputed embeddings (scripts/encode_dataset.py). Writes outputs/<name>.{eqx,json,pt};
 the .pt is what scripts/evaluate.py loads.
@@ -11,6 +12,8 @@ the .pt is what scripts/evaluate.py loads.
     python scripts/train.py --ls-steps 10                 # EXP: + 10 MALA steps per plan as off-policy data
     python scripts/train.py --method bc                   # baseline: behavior cloning on expert actions
     python scripts/train.py --method map --beta 120       # baseline: one plan per condition, min beta J - log N
+    python scripts/train.py --method ppo --beta 120       # baseline: PPO maximizing -beta J + log N (classic)
+    python scripts/train.py --method ppo --ent-coef 1     # PPO whose optimum is the GFlowNet target (max-ent)
 
 See gplan/jax/losses.py for the target distribution and the two losses.
 """
@@ -29,6 +32,7 @@ from gplan.jax.baselines import bc_loss, map_loss, train_baseline
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
 from gplan.jax.policy import GPlaner
+from gplan.jax.ppo import Critic, critic_key, PPOConfig, train_ppo
 from gplan.jax.train import init_key, linear_beta_schedule, train, TrainConfig
 
 
@@ -47,9 +51,10 @@ def plan_step_dim(frameskip, env_action_dim, cost_model):
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--method", default="gfn", choices=["gfn", "bc", "map"],
+    p.add_argument("--method", default="gfn", choices=["gfn", "bc", "map", "ppo"],
                    help="gfn: the GFlowNet; bc: behavior cloning on expert plans; map: amortized MAP planning "
-                        "(gplan/jax/baselines.py). bc / map ignore the GFlowNet-only flags (loss, MALA, beta warmup)")
+                        "(gplan/jax/baselines.py); ppo: PPO with a critic (gplan/jax/ppo.py, flags [ppo]). bc / map / "
+                        "ppo ignore the GFlowNet-only flags (loss, MALA, beta warmup)")
     p.add_argument("--ckpt", type=Path, default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
     p.add_argument("--dataset", default="tworoom", help="dataset name under $STABLEWM_HOME")
     p.add_argument("--latents", type=Path, default=None,
@@ -84,6 +89,19 @@ def parse_args():
     p.add_argument("--ls-step-size", type=float, default=1e-3, help="EXP MALA: initial step size eta")
     p.add_argument("--ls-target-accept", type=float, default=0.574,
                    help="EXP MALA: eta is adapted toward this acceptance rate (0 = keep eta fixed)")
+    p.add_argument("--ppo-reward", default="target", choices=["target", "cost"],
+                   help="[ppo] plan return: -beta J + log N(A; 0, s^2 I) (the GFlowNet's log target) or -beta J")
+    p.add_argument("--ent-coef", type=float, default=0.0,
+                   help="[ppo] c in the per-step reward -c log pi(a_t | s_t): 0 = classic PPO, 1 = max-ent (optimum: "
+                        "the GFlowNet target)")
+    p.add_argument("--ppo-epochs", type=int, default=4, help="[ppo] passes over each rollout")
+    p.add_argument("--ppo-minibatches", type=int, default=4, help="[ppo] minibatches per pass")
+    p.add_argument("--clip-eps", type=float, default=0.2, help="[ppo] probability-ratio clipping")
+    p.add_argument("--gae-lambda", type=float, default=0.95, help="[ppo] GAE lambda (gamma = 1: 5-step episodes)")
+    p.add_argument("--vf-coef", type=float, default=0.5, help="[ppo] weight of the critic's loss")
+    p.add_argument("--target-kl", type=float, default=0.0,
+                   help="[ppo] skip an iteration's remaining epochs once an epoch's approx KL exceeds this (0 = off)")
+    p.add_argument("--ppo-grad-clip", type=float, default=0.5, help="[ppo] max global grad norm (policy + critic)")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--n-batches", type=int, default=1000)
     p.add_argument("--seed", type=int, default=0)
@@ -144,11 +162,21 @@ def main():
         batches = pairs.expert_batches(args.n_batches, args.batch_size, args.n_steps, args.seed)
         model, losses = train_baseline(model, bc_loss, batches, lr=args.lr, grad_clip=args.grad_clip,
                                        log_every=args.log_every)
-    else:  # map: the final beta, no warmup
+    elif args.method == "map":  # the final beta, no warmup
         loss_fn = partial(map_loss, cost_model=cost_model, beta=args.beta / d, reference_var=args.ref_var,
                           action_dim=args.action_dim)
         model, losses = train_baseline(model, loss_fn, pairs.batches(args.n_batches, args.batch_size, args.seed),
                                        lr=args.lr, grad_clip=args.grad_clip, log_every=args.log_every)
+    else:  # ppo: --n-batches iterations of --batch-size conditions x --n-samples plans; the final beta
+        critic = Critic(d, model.horizon, model.n_steps, key=critic_key(args.seed))
+        ppo_cfg = PPOConfig(n_samples=args.n_samples, action_dim=args.action_dim, reference_var=args.ref_var,
+                            reward=args.ppo_reward, ent_coef=args.ent_coef, gae_lambda=args.gae_lambda,
+                            clip_eps=args.clip_eps, vf_coef=args.vf_coef, epochs=args.ppo_epochs,
+                            minibatches=args.ppo_minibatches, target_kl=args.target_kl, grad_clip=args.ppo_grad_clip)
+        model, _, returns = train_ppo(model, critic, cost_model,
+                                      pairs.batches(args.n_batches, args.batch_size, args.seed), args.beta / d,
+                                      ppo_cfg, lr=args.lr, seed=args.seed, log_every=args.log_every)
+        losses = [-r for r in returns]  # final_loss below = minus the last iteration's mean plan return
 
     checkpoint.save(args.out, model, model_kwargs, train_args=config)
     print(f"saved {args.out}.eqx / .json / .pt")

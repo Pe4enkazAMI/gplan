@@ -35,6 +35,7 @@ gplan/
     losses.py          TB and VarGrad on xi = log P_F + β'J − log N(A), diagnostics
     mala.py            MALA local search on plans (off-policy training samples)
     baselines.py       behavior cloning and amortized MAP planning with the same network
+    ppo.py             PPO baseline: the same network as an RL policy, PPO-clip + GAE + a learned critic
     latents.py         (start, goal) pairs from the precomputed latents, expert plans between them
     train.py           optimizer, jitted train step, training loop, random streams
     probe.py           headroom probe: gradient refinement of sampled plans through LeWM
@@ -44,7 +45,7 @@ scripts/             convert_lewm, download_data, encode_dataset, train, export_
                      aggregate_results, probe_headroom
 experiments/         train.sh, eval.sh, tables.sh: the paper's runs and tables for one task (config.sh)
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
-                     test_jax_optimum / test_jax_baselines (closed-form optima), test_results,
+                     test_jax_optimum / test_jax_baselines / test_jax_ppo (closed-form optima), test_results,
                      test_eval_e2e (evaluate.py on tiny datasets recorded with the real envs, all four
                      tasks), test_scripts (every CLI), test_download_data
 le-wm/               LeWM sources (git submodule)
@@ -183,7 +184,9 @@ bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md
 | `gfn-mala` | the GFlowNet + MALA plans as off-policy data (from the end of the beta warmup) |
 | `bc` | behavior cloning on the expert actions (same network) |
 | `map` | amortized MAP planning through LeWM (same network, one plan per condition) |
-| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`) |
+| `ppo` | PPO (clipped surrogate, GAE, learned critic) maximizing the plan return −βJ + log N(A): a reward maximizer |
+| `ppo-maxent` | the same with the entropy term −log π in the reward (`--ent-coef 1`): its optimum is the GFlowNet target |
+| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`); every task: `ppo-cost`, PPO on −βJ alone |
 
 | Table | Content |
 | --- | --- |
@@ -234,7 +237,7 @@ python scripts/export_planner.py outputs/pusht
 ## Tests
 
 ```bash
-pytest                    # everything, ~16 min on CPU (Reacher / Cube tests need the [mujoco] extra, else skipped)
+pytest                    # everything, ~17 min on CPU (Reacher / Cube tests need the [mujoco] extra, else skipped)
 pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~2.5 min
 ruff check .              # pyflakes + import order
 ```

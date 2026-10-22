@@ -13,6 +13,8 @@ import pytest
 import torch
 from conftest import IMG, make_wm
 
+from gplan.torch.policy import load_planner
+
 REPO = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.slow
 EMBED, ENV_ACTION_DIM, FRAMESKIP = 16, 2, 5
@@ -75,14 +77,17 @@ def trained(home, latents, tmp_path_factory):
     return out
 
 
-@pytest.mark.parametrize("method", ["bc", "map"])
-def test_train_baselines(home, latents, tmp_path, method):
+@pytest.mark.parametrize("method, extra", [("bc", []), ("map", []), ("ppo", ["--ent-coef", "1", "--target-kl", "0.02"])])
+def test_train_baselines(home, latents, tmp_path, method, extra):
+    """Each baseline trains a few steps and exports a planner evaluate.py loads (a GPlaner of the same shape)."""
     out = tmp_path / method
     run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"), "--method", method,
          "--n-batches", "3", "--batch-size", "4", "--beta", "1", "--holdout-frac", "0.34", "--wandb-mode", "disabled",
-         "--out", str(out)], home)
+         "--out", str(out), *extra], home)
     meta = json.loads(Path(f"{out}.json").read_text())
-    assert meta["train_args"]["method"] == method and Path(f"{out}.pt").exists()
+    assert meta["train_args"]["method"] == method and meta["model_kwargs"]["horizon"] == 5 * FRAMESKIP * ENV_ACTION_DIM
+    planner, train_args = load_planner(f"{out}.pt")
+    assert train_args["method"] == method and planner.horizon == 5 * FRAMESKIP * ENV_ACTION_DIM
 
 
 @pytest.fixture(scope="session")
