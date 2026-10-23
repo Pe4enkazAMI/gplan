@@ -20,7 +20,7 @@ STD = np.linspace(0.3, 0.8, H).astype(np.float32)
 
 
 def test_bc_loss_is_the_negative_log_likelihood():
-    model = jp.GPlaner(state_dim=D, horizon=H, action_dim=A, n_components=2, key=init_key(0))
+    model = jp.GPlanner(state_dim=D, horizon=H, action_dim=A, n_components=2, key=init_key(0))
     k1, k2, k3 = jax.random.split(jax.random.key(0), 3)
     zs, zg, plans = jax.random.normal(k1, (5, D)), jax.random.normal(k2, (5, D)), jax.random.normal(k3, (5, T, A))
     loss, _ = bc_loss(model, zs, zg, plans)
@@ -40,7 +40,7 @@ def test_bc_recovers_the_expert_distribution():
             yield rng.normal(size=(256, D)).astype(np.float32), rng.normal(size=(256, D)).astype(np.float32), plans
 
     steps = 2000
-    model = jp.GPlaner(state_dim=D, horizon=H, action_dim=A, key=init_key(0))
+    model = jp.GPlanner(state_dim=D, horizon=H, action_dim=A, key=init_key(0))
     model, losses = train_baseline(model, bc_loss, batches(steps), lr=3e-3, grad_clip=10.0, log_every=10**9)
     zs, zg, plans = next(batches(1))
     _, dists = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans.reshape(256, H))
@@ -63,7 +63,7 @@ def test_map_recovers_the_minimizer_of_the_target():
     batches = ((rng.normal(size=(64, D)).astype(np.float32), rng.normal(size=(64, D)).astype(np.float32))
                for _ in range(steps))
     loss_fn = partial(map_loss, cost_model=ShiftedQuadratic(target), beta=beta, reference_var=s2, action_dim=A)
-    model = jp.GPlaner(state_dim=D, horizon=H, action_dim=A, key=init_key(0))
+    model = jp.GPlanner(state_dim=D, horizon=H, action_dim=A, key=init_key(0))
     model, _ = train_baseline(model, loss_fn, batches, lr=1e-2, grad_clip=10.0, log_every=10**9)
     zs, zg = (jnp.asarray(rng.normal(size=(256, D)).astype(np.float32)) for _ in range(2))  # unseen conditions
     plans = np.asarray(jax.vmap(lambda s, g: jp.rollout(model, jax.random.key(0), s, g, mode="mean"))(zs, zg))

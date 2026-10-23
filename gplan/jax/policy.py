@@ -1,6 +1,6 @@
-"""GPlaner in Equinox: the goal-conditioned autoregressive policy over action plans.
+"""GPlanner in Equinox: the goal-conditioned autoregressive policy over action plans.
 
-Same architecture and parameter layout as `gplan.torch.policy.GPlaner` (PyTorch), so weights convert in
+Same architecture and parameter layout as `gplan.torch.policy.GPlanner` (PyTorch), so weights convert in
 both directions (`gplan.jax.convert`). Everything here works on ONE plan; batch with `jax.vmap`.
 
 A plan is a flat buffer of `horizon = n_steps * action_dim` values, step-major. Step t is predicted
@@ -15,7 +15,7 @@ import jax.numpy as jnp
 from gplan.jax.distributions import DiagGaussianMixture
 
 
-class GPlaner(eqx.Module):
+class GPlanner(eqx.Module):
     in_proj: eqx.nn.Linear
     backbone: list[eqx.nn.Linear]
     out_proj: eqx.nn.Linear
@@ -64,6 +64,9 @@ class GPlaner(eqx.Module):
         logits = out[2 * K * A:] if K > 1 else jnp.zeros(1)
         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (jnp.tanh(raw_std) + 1.0)
         return DiagGaussianMixture.from_logits(logits, means, jnp.exp(log_std))
+
+
+GPlaner = GPlanner  # the former name, for scripts that still import it
 
 
 def head_size(action_dim, n_components):

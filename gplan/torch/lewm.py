@@ -23,14 +23,12 @@ if str(LEWM_DIR) not in sys.path:
     sys.path.insert(0, str(LEWM_DIR))
 
 
-def img_transform(img_size=224):
-    """uint8 HWC frame -> normalized float CHW tensor, as LeWM was trained."""
-    return transforms.Compose([
-        transforms.ToImage(),
-        transforms.ToDtype(torch.float32, scale=True),
-        transforms.Normalize(**IMAGENET),
-        transforms.Resize(size=img_size),
-    ])
+def img_transform(img_size=224, batch=False):
+    """uint8 frames -> normalized float tensors, as LeWM was trained: one HWC frame (as swm hands it to the
+    policy) -> CHW, or with batch=True a (B, C, H, W) uint8 tensor -> (B, C, H, W) (dataset encoding)."""
+    steps = [transforms.ToDtype(torch.float32, scale=True), transforms.Normalize(**IMAGENET),
+             transforms.Resize(size=img_size)]
+    return transforms.Compose(steps if batch else [transforms.ToImage(), *steps])
 
 
 def load_lewm(ckpt_path, device="cpu"):
@@ -68,14 +66,14 @@ def encode(wm, pixels):
     return wm.encode({"pixels": pixels.unsqueeze(1)})["emb"][:, 0]
 
 
-@torch.no_grad()
 def lewm_cost(wm, z_start, z_goal, actions, history_size=None):
-    """J(A, c): LeWM planning cost of an action plan (no gradient; see `lewm_cost_grad`).
+    """J(A, c): LeWM planning cost of an action plan.
 
     Rolls the frozen predictor forward from z_start through `actions` and returns
     the squared distance of the final predicted embedding to z_goal. This is
     `JEPA.rollout` + `JEPA.criterion` with a single start frame, run directly
-    on embeddings.
+    on embeddings. Differentiable w.r.t. the actions (test-time refinement); the
+    solvers call it under torch.no_grad.
 
     Args:
         z_start, z_goal: (B, D)
@@ -84,11 +82,6 @@ def lewm_cost(wm, z_start, z_goal, actions, history_size=None):
     Returns:
         (B,) cost per plan.
     """
-    return lewm_cost_grad(wm, z_start, z_goal, actions, history_size)
-
-
-def lewm_cost_grad(wm, z_start, z_goal, actions, history_size=None):
-    """`lewm_cost` with autograd left on, so J can be differentiated w.r.t. the actions."""
     history_size = history_size or history_length(wm)
     emb = z_start.unsqueeze(1)  # (B, 1, D)
     for t in range(actions.shape[1]):

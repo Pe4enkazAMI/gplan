@@ -4,14 +4,13 @@ import json
 import math
 import subprocess
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import REPO
 
 from gplan.results import comparison_table, group_runs, load_runs, mcnemar_exact, wilson_interval
 
-REPO = Path(__file__).resolve().parents[1]
 ARGS = dict(task="pusht", dataset="pusht_expert_train", wm="pusht/lewm", goal_offset=25, eval_budget=50, num_eval=4,
             holdout_frac=0.1, split_seed=0, horizon=5, action_block=5, img_size=224, gflow_samples=64,
             gflow_select="min-cost", cem_samples=300, cem_steps=30, cem_topk=30, label=None)

@@ -48,7 +48,7 @@ def test_mixture_with_local_search_gives_both_modes_their_mass(seed):
     can still go wrong is the shape: on some seeds both components sit at 0 with a wide std,
     covering both wells instead of fitting each (a symmetric stationary point), so only the mass
     is asserted per seed."""
-    model = jp.GPlaner(state_dim=D, horizon=1, hidden_size=32, n_components=2, key=init_key(seed))
+    model = jp.GPlanner(state_dim=D, horizon=1, hidden_size=32, n_components=2, key=init_key(seed))
     batch = (np.zeros((64, D), np.float32), np.zeros((64, D), np.float32))
     cfg = TrainConfig(n_samples=1, action_dim=1, reference_var=4.0, grad_clip=10.0,
                       ls_steps=10, ls_step_size=0.01)

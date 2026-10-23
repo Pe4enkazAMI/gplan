@@ -1,27 +1,28 @@
 """Evaluation protocol: task presets and LeWM-identical start sampling (needs the `eval` extra)."""
 
-import importlib.util
 import types
-from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import load_script
 
 from gplan.data import split_episodes
 
 pytest.importorskip("stable_worldmodel")
-from gplan.torch.evaluation import sample_eval_starts, Standardizer, TASKS, trained_on  # noqa: E402
+from gplan.torch import evaluation  # noqa: E402
+from gplan.torch.evaluation import (  # noqa: E402
+    check_planner_matches,
+    sample_eval_starts,
+    Standardizer,
+    TASKS,
+    trained_on,
+)
 from gplan.torch.lewm import LEWM_DIR  # noqa: E402
-
-REPO = Path(__file__).resolve().parents[1]
 
 
 def evaluate_script():
     """scripts/evaluate.py as a module (its argument parser holds the protocol defaults)."""
-    spec = importlib.util.spec_from_file_location("evaluate_script", REPO / "scripts" / "evaluate.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script("evaluate")
 
 
 class FakeDataset:
@@ -117,22 +118,36 @@ def test_trained_on_follows_the_planners_recorded_split():
 def test_planner_trained_for_another_protocol_is_an_error_unless_allowed(monkeypatch, tmp_path, capsys):
     """Dataset, LeWM checkpoint, goal offset, plan steps or frameskip differing from the evaluation's stop
     it; --allow-mismatch turns the errors into warnings. Keys the planner did not record are not compared."""
-    module = evaluate_script()
-    monkeypatch.setattr(module, "wandb", types.SimpleNamespace(config=types.SimpleNamespace(update=lambda _: None)))
-    monkeypatch.setattr(module, "STABLEWM_HOME", tmp_path)
-    args, _ = module.parse_args([])  # TwoRoom: dataset tworoom, wm tworoom/lewm, goal offset 25, 5 steps, frameskip 5
+    monkeypatch.setattr(evaluation, "STABLEWM_HOME", tmp_path)
+    args, _ = evaluate_script().parse_args([])  # TwoRoom: dataset tworoom, wm tworoom/lewm, goal offset 25, 5 steps, frameskip 5
     planner = types.SimpleNamespace(horizon=5 * 5 * 2)  # 5 steps x frameskip 5 x 2-d env actions
     matching = {"dataset": "tworoom", "ckpt": str(tmp_path / "tworoom" / "lewm_object.ckpt"), "goal_offset": 25,
                 "n_steps": 5, "frameskip": 5, "beta": 90.0}
     for train_args in (matching, {"beta": 90.0}, None):
-        module.check_planner_matches(planner, train_args, args, env_action_dim=2)
+        check_planner_matches(planner, train_args, args, env_action_dim=2)
     assert "WARNING" not in capsys.readouterr().out
     for key, value in [("dataset", "pusht_expert_train"), ("ckpt", str(tmp_path / "pusht" / "lewm_object.ckpt")),
                        ("goal_offset", 24), ("n_steps", 4), ("frameskip", 1)]:
         with pytest.raises(SystemExit, match="ERROR: planner was trained .*--allow-mismatch"):
-            module.check_planner_matches(planner, {**matching, key: value}, args, env_action_dim=2)
-    allowed, _ = module.parse_args(["--allow-mismatch"])
-    module.check_planner_matches(planner, {**matching, "goal_offset": 24, "dataset": "x"}, allowed, env_action_dim=2)
+            check_planner_matches(planner, {**matching, key: value}, args, env_action_dim=2)
+    allowed, _ = evaluate_script().parse_args(["--allow-mismatch"])
+    check_planner_matches(planner, {**matching, "goal_offset": 24, "dataset": "x"}, allowed, env_action_dim=2)
     out = capsys.readouterr().out
     assert "WARNING: planner was trained with goal_offset=24 but eval uses 25" in out
     assert "WARNING: planner was trained with dataset=x but eval uses tworoom" in out
+
+
+def test_refine_settings_default_to_the_planners_training_values():
+    """beta (per embedding dim) and s^2 come from the planner's train_args unless --refine-beta is given;
+    without a planner, s^2 is --prior-var and the target objective needs --refine-beta."""
+    args, _ = evaluate_script().parse_args(["--prior-var", "2.0"])
+    planner_args = {"beta": 96.0, "ref_var": 0.5}
+    assert evaluation.refine_settings(args, planner_args, d=192) == dict(
+        steps=20, lr=0.05, objective="target", beta=0.5, reference_var=0.5)
+    given, _ = evaluate_script().parse_args(["--refine-beta", "48", "--refine-steps", "5"])
+    assert evaluation.refine_settings(given, planner_args, d=192)["beta"] == 0.25
+    assert evaluation.refine_settings(given, None, d=192)["reference_var"] == 1.0  # --prior-var default
+    with pytest.raises(ValueError, match="--refine-beta is needed"):
+        evaluation.refine_settings(args, None, d=192)
+    cost, _ = evaluate_script().parse_args(["--refine-objective", "cost"])
+    assert evaluation.refine_settings(cost, None, d=192)["beta"] == 0.0  # J alone: beta unused

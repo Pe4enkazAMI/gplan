@@ -1,28 +1,22 @@
 """scripts/download_data.py without the network: unpacking a .tar.zst, putting the .h5 where the code
 expects it, and checking that the dataset has every column the task's protocol reads."""
 
-import importlib.util
 import io
 import tarfile
-from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
+from conftest import load_script, REPO
 
 zstandard = pytest.importorskip("zstandard")
 pytest.importorskip("stable_worldmodel")
 from gplan.torch.evaluation import TASKS  # noqa: E402
 
-REPO = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture(scope="module")
 def dl():
-    spec = importlib.util.spec_from_file_location("download_data", REPO / "scripts" / "download_data.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script("download_data")
 
 
 def write_h5(path, columns):

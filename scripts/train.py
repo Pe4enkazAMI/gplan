@@ -1,4 +1,4 @@
-"""Train the GPlaner sampler (JAX) as a conditional GFlowNet over LeWM action plans (--method gfn),
+"""Train the GPlanner sampler (JAX) as a conditional GFlowNet over LeWM action plans (--method gfn),
 or the same network as a baseline: behavior cloning on the dataset's expert actions (--method bc),
 amortized MAP planning through LeWM (--method map; evaluate with --gflow-select mean) or PPO with a
 learned critic (--method ppo, gplan/jax/ppo.py).
@@ -30,7 +30,7 @@ from gplan.jax import checkpoint
 from gplan.jax.baselines import bc_loss, map_loss, train_baseline
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import LatentPairs
-from gplan.jax.policy import GPlaner
+from gplan.jax.policy import GPlanner
 from gplan.jax.ppo import Critic, critic_key, PPOConfig, train_ppo
 from gplan.jax.train import init_key, linear_beta_schedule, train, TrainConfig
 
@@ -134,7 +134,7 @@ def main():
     args.action_dim = plan_step_dim(args.frameskip, pairs.actions.shape[1], cost_model)  # recorded in train_args
     model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
                         n_components=args.n_components)
-    model = GPlaner(**model_kwargs, key=init_key(args.seed))
+    model = GPlanner(**model_kwargs, key=init_key(args.seed))
     cfg = TrainConfig(n_samples=args.n_samples, action_dim=args.action_dim,
                       reference_var=args.ref_var, grad_clip=args.grad_clip, ls_steps=args.ls_steps,
                       ls_every=args.ls_every, ls_start=args.ls_start, ls_step_size=args.ls_step_size,

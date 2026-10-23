@@ -1,32 +1,12 @@
-"""The probability distributions the planner uses, in PyTorch (twin of `gplan.jax.distributions`).
+"""The planner's step distribution in PyTorch, for sampling at evaluation (twin of the sampling part of
+`gplan.jax.distributions`, where training also scores plans).
 
-    normal_log_prob(x, mean, std)       elementwise log N(x; mean, std^2)
-    reference_log_prob(actions, var)    log N(A; 0, s^2 I) of a whole plan buffer
-    gaussian_entropy(std)               elementwise entropy of N(., std^2)
-    DiagGaussianMixture                 sum_k w_k N(mean_k, diag std_k^2): one plan step of the policy
+    DiagGaussianMixture    sum_k w_k N(mean_k, diag std_k^2): one plan step of the policy
 
 Sampling takes an optional `torch.Generator`, so a solver can own its random stream.
 """
 
-import math
-
 import torch
-
-LOG_2PI = math.log(2 * math.pi)
-
-
-def normal_log_prob(x, mean, std):
-    return -0.5 * ((x - mean) / std) ** 2 - torch.log(std) - 0.5 * LOG_2PI
-
-
-def reference_log_prob(actions, reference_var):
-    """log N(actions; 0, s^2 I) summed over the last axis (the plan buffer)."""
-    std = torch.as_tensor(reference_var, dtype=actions.dtype, device=actions.device).sqrt()
-    return normal_log_prob(actions, 0.0, std).sum(-1)
-
-
-def gaussian_entropy(std):
-    return 0.5 * (LOG_2PI + 1.0) + torch.log(std)
 
 
 class DiagGaussianMixture:
@@ -46,11 +26,6 @@ class DiagGaussianMixture:
     def weights(self):
         return self.log_weights.exp()
 
-    def log_prob(self, x):
-        """log sum_k w_k N(x; mean_k, diag std_k^2), computed with logsumexp. x (B, A) -> (B,)."""
-        per_component = normal_log_prob(x[:, None, :], self.means, self.stds).sum(-1)  # (B, K)
-        return torch.logsumexp(self.log_weights + per_component, dim=-1)
-
     def sample(self, generator=None):
         """One draw per row (B, A): pick a component by its weight, then sample that Gaussian."""
         B, K, A = self.means.shape
@@ -64,7 +39,3 @@ class DiagGaussianMixture:
         its modes; with one component the two coincide."""
         best = self.log_weights.argmax(-1)
         return self.means[torch.arange(self.means.shape[0], device=self.means.device), best]
-
-    def entropy_lower_bound(self):
-        """sum_k w_k H(component k) (B,): a lower bound on the mixture entropy, exact for K = 1."""
-        return (self.weights * gaussian_entropy(self.stds).sum(-1)).sum(-1)

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from conftest import A, ARPredictor, B, D, DummyEncoder, Embedder, HS, JEPA, make_wm, MLP, randomize_, T
 
-from gplan.torch.lewm import check_history, encode, history_length, lewm_cost, lewm_cost_grad
+from gplan.torch.lewm import check_history, encode, history_length, lewm_cost
 
 
 def test_encode_shape(wm, batch):
@@ -28,13 +28,6 @@ def test_lewm_cost_matches_jepa_rollout(wm, batch):
 
     assert ours.shape == (B,)
     assert torch.allclose(ours, ref, atol=1e-5), (ours - ref).abs().max()
-
-
-def test_cost_is_constant_target(wm, sampler, batch):
-    """The cost must not carry gradients: it is the (log) reward, not a learnable quantity."""
-    z_start, z_goal = encode(wm, batch[0]), encode(wm, batch[1])
-    actions = sampler.rollout(z_start, z_goal)
-    assert not lewm_cost(wm, z_start, z_goal, actions.view(B, T, A)).requires_grad
 
 
 def test_history_size_comes_from_the_checkpoint(batch):
@@ -62,12 +55,16 @@ def test_history_size_comes_from_the_checkpoint(batch):
                                ours.numpy(), rtol=1e-5)
 
 
-def test_cost_grad_has_the_same_value_and_a_gradient(batch):
+def test_cost_is_differentiable_in_the_actions_and_constant_under_no_grad(batch):
+    """Refinement differentiates J w.r.t. the actions; the solvers score plans under no_grad (same value)."""
     wm = make_wm(embed=D, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16, action_dim=A)
     z_start, z_goal = torch.randn(B, D), torch.randn(B, D)
     actions = torch.randn(B, T, A, requires_grad=True)
-    value = lewm_cost_grad(wm, z_start, z_goal, actions)
-    torch.testing.assert_close(value.detach(), lewm_cost(wm, z_start, z_goal, actions))
+    value = lewm_cost(wm, z_start, z_goal, actions)
+    with torch.no_grad():
+        constant = lewm_cost(wm, z_start, z_goal, actions)
+    assert not constant.requires_grad
+    torch.testing.assert_close(value.detach(), constant, rtol=0, atol=0)
     value.sum().backward()
     assert torch.isfinite(actions.grad).all() and actions.grad.abs().sum() > 0
 

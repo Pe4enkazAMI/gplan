@@ -1,7 +1,7 @@
 """The probability module, in both frameworks.
 
-The PyTorch version is checked against torch.distributions (an independent implementation) and
-the JAX version against the PyTorch one, so a mistake shared by our two twins would still fail.
+The JAX densities (training) are checked against torch.distributions, an independent implementation;
+the PyTorch mixture (evaluation only samples it) against the JAX one and by its draws.
 """
 
 import jax
@@ -34,37 +34,46 @@ def jax_mixture(logits, means, stds):
     return jd.DiagGaussianMixture.from_logits(*(jnp.asarray(t.numpy()) for t in (logits, means, stds)))
 
 
-@pytest.mark.parametrize("n_components", [1, K])
-def test_torch_log_prob_matches_torch_distributions(n_components):
-    logits, means, stds, x = random_mixture(n_components)
-    ours = td.DiagGaussianMixture.from_logits(logits, means, stds)
-    torch.testing.assert_close(ours.log_prob(x), reference(logits, means, stds).log_prob(x))
-    torch.testing.assert_close(ours.weights, torch.softmax(logits, -1))
+def entropy_bound_reference(logits, means, stds):
+    """sum_k w_k H(component k), with torch.distributions' Gaussian entropy."""
+    return (torch.softmax(logits, -1) * Normal(means, stds).entropy().sum(-1)).sum(-1)
 
 
 @pytest.mark.parametrize("n_components", [1, K])
-def test_jax_matches_torch(n_components):
+def test_jax_matches_torch_distributions(n_components):
     logits, means, stds, x = random_mixture(n_components)
-    ours, theirs = jax_mixture(logits, means, stds), td.DiagGaussianMixture.from_logits(logits, means, stds)
-    for name in ("log_weights", "means", "stds"):
-        np.testing.assert_allclose(np.asarray(getattr(ours, name)), getattr(theirs, name).numpy(), rtol=1e-6)
-    np.testing.assert_allclose(np.asarray(ours.log_prob(jnp.asarray(x.numpy()))), theirs.log_prob(x).numpy(),
-                               rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(ours.mode()), theirs.mode().numpy())
-    np.testing.assert_allclose(np.asarray(ours.entropy_lower_bound()), theirs.entropy_lower_bound().numpy(), rtol=1e-6)
+    ours = jax_mixture(logits, means, stds)
+    np.testing.assert_allclose(np.asarray(ours.log_prob(jnp.asarray(x.numpy()))),
+                               reference(logits, means, stds).log_prob(x).numpy(), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(ours.weights), torch.softmax(logits, -1).numpy(), rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(ours.entropy_lower_bound()),
+                               entropy_bound_reference(logits, means, stds).numpy(), rtol=1e-6)
     # one distribution at a time (how the policy uses it under vmap) gives the same numbers
     single = jax.tree.map(lambda a: a[0], ours)
-    np.testing.assert_allclose(float(single.log_prob(jnp.asarray(x[0].numpy()))), theirs.log_prob(x)[0].item(),
-                               rtol=1e-6)
+    np.testing.assert_allclose(float(single.log_prob(jnp.asarray(x[0].numpy()))),
+                               reference(logits, means, stds).log_prob(x)[0].item(), rtol=1e-6)
+
+
+@pytest.mark.parametrize("n_components", [1, K])
+def test_torch_mixture_matches_jax(n_components):
+    """The PyTorch twin: same parameters from the same logits, same mode."""
+    logits, means, stds, _ = random_mixture(n_components)
+    ours, theirs = td.DiagGaussianMixture.from_logits(logits, means, stds), jax_mixture(logits, means, stds)
+    for name in ("log_weights", "means", "stds"):
+        np.testing.assert_allclose(getattr(ours, name).numpy(), np.asarray(getattr(theirs, name)), rtol=1e-6)
+    np.testing.assert_allclose(ours.mode().numpy(), np.asarray(theirs.mode()))
+    torch.testing.assert_close(ours.weights, torch.softmax(logits, -1))
 
 
 def test_one_component_is_the_diagonal_gaussian():
     logits, means, stds, x = random_mixture(1)
-    mix = td.DiagGaussianMixture.from_logits(logits, means, stds)
+    mix = jax_mixture(logits, means, stds)
     gauss = Independent(Normal(means[:, 0], stds[:, 0]), 1)
-    torch.testing.assert_close(mix.log_prob(x), gauss.log_prob(x))
-    torch.testing.assert_close(mix.entropy_lower_bound(), gauss.entropy())
-    torch.testing.assert_close(mix.mode(), means[:, 0])
+    np.testing.assert_allclose(np.asarray(mix.log_prob(jnp.asarray(x.numpy()))), gauss.log_prob(x).numpy(),
+                               rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(mix.entropy_lower_bound()), gauss.entropy().numpy(), rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(mix.mode()), means[:, 0].numpy())
+    torch.testing.assert_close(td.DiagGaussianMixture.from_logits(logits, means, stds).mode(), means[:, 0])
 
 
 def test_entropy_lower_bound_is_below_the_mixture_entropy():
@@ -72,8 +81,8 @@ def test_entropy_lower_bound_is_below_the_mixture_entropy():
     logits, means, stds, _ = random_mixture()
     ref = reference(logits, means, stds)
     mc_entropy = -ref.log_prob(ref.sample((20000,))).mean(0)
-    bound = td.DiagGaussianMixture.from_logits(logits, means, stds).entropy_lower_bound()
-    assert torch.all(bound <= mc_entropy + 0.05)
+    bound = np.asarray(jax_mixture(logits, means, stds).entropy_lower_bound())
+    assert np.all(bound <= mc_entropy.numpy() + 0.05)
 
 
 def test_mode_is_the_mean_of_the_heaviest_component():
@@ -126,15 +135,15 @@ def test_extreme_weights_stay_finite():
     logits, means, stds, x = random_mixture(logit_scale=1.0)
     logits[:, 1] = -1e4
     stds[:, 2] = 1e-3
-    for dist in (td.DiagGaussianMixture.from_logits(logits, means, stds), jax_mixture(logits, means, stds)):
-        log_p = np.asarray(dist.log_prob(x if isinstance(dist, td.DiagGaussianMixture) else jnp.asarray(x.numpy())))
-        assert np.all(np.isfinite(log_p))
-        assert np.all(np.isfinite(np.asarray(dist.entropy_lower_bound())))
+    dist = jax_mixture(logits, means, stds)
+    assert np.all(np.isfinite(np.asarray(dist.log_prob(jnp.asarray(x.numpy())))))
+    assert np.all(np.isfinite(np.asarray(dist.entropy_lower_bound())))
+    draws = td.DiagGaussianMixture.from_logits(logits, means, stds).sample(torch.Generator().manual_seed(0))
+    assert torch.isfinite(draws).all()
 
 
 def test_reference_log_prob_is_the_isotropic_gaussian():
     actions = torch.randn(B, 10)
     ref = Normal(0.0, 2.0 ** 0.5).log_prob(actions).sum(-1)
-    torch.testing.assert_close(td.reference_log_prob(actions, 2.0), ref)
     np.testing.assert_allclose(np.asarray(jd.reference_log_prob(jnp.asarray(actions.numpy()), 2.0)), ref.numpy(),
                                rtol=1e-6)

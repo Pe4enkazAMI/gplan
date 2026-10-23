@@ -10,24 +10,25 @@ import numpy as np
 import optax
 import pytest
 import torch
-from conftest import A, B, D, T
+from conftest import A, B, D, T, torch_step_log_probs
 from toy_costs import QuadraticCost
 
 from gplan.jax import checkpoint
 from gplan.jax import policy as jp
 from gplan.jax import train as train_module
-from gplan.jax.convert import gplaner_to_torch, lewm_from_torch
+from gplan.jax.convert import gplanner_to_torch, lewm_from_torch
 from gplan.jax.train import (
     init_key,
     linear_beta_schedule,
     make_optimizer,
     MALA_STREAM,
     norm_stats,
+    StepLog,
     train,
     TRAIN_STREAM,
     TrainConfig,
 )
-from gplan.torch.policy import load_planner, Sampler
+from gplan.torch.policy import load_planner
 
 
 @pytest.mark.slow
@@ -42,7 +43,7 @@ def test_train_converges_to_analytic_solution(ls_steps):
     steps). Tolerances are 2-6x the worst error over 8 seeds x 2 variants (calibration below); the
     analytic numbers are exact, see tests/test_jax_optimum.py for the objective itself."""
     beta, s2, H, steps = 2.0, 1.0, T * A, 6000
-    model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=init_key(0))  # scalar layout
+    model = jp.GPlanner(state_dim=D, horizon=H, hidden_size=64, key=init_key(0))  # scalar layout
     rng = np.random.default_rng(0)
     batch = (rng.normal(size=(64, D)).astype(np.float32), rng.normal(size=(64, D)).astype(np.float32))
     cfg = TrainConfig(n_samples=1, action_dim=1, reference_var=s2, grad_clip=10.0, ls_steps=ls_steps, ls_step_size=0.05)
@@ -68,7 +69,7 @@ def test_train_with_lewm_then_export_to_torch(wm, tmp_path, n_components):
     """End to end on the tiny LeWM: train a few steps, save, reload in JAX, and load the .pt with the
     torch eval loader; all three hold the same weights and the torch policy scores plans the same way."""
     model_kwargs = dict(state_dim=D, horizon=T * A, action_dim=A, n_components=n_components)
-    model = jp.GPlaner(**model_kwargs, key=init_key(0))
+    model = jp.GPlanner(**model_kwargs, key=init_key(0))
     rng = np.random.default_rng(0)
     batches = [(rng.normal(size=(B, D)).astype(np.float32), rng.normal(size=(B, D)).astype(np.float32))] * 3
     cfg = TrainConfig(n_samples=2, action_dim=A, grad_clip=10.0)
@@ -84,9 +85,9 @@ def test_train_with_lewm_then_export_to_torch(wm, tmp_path, n_components):
     torch_model, train_args = load_planner(tmp_path / "run.pt")
     assert train_args == {"n_steps": T} and torch_model.n_components == n_components
     for name, p in torch_model.state_dict().items():
-        np.testing.assert_array_equal(p.numpy(), gplaner_to_torch(reloaded)[name].numpy(), err_msg=name)
+        np.testing.assert_array_equal(p.numpy(), gplanner_to_torch(reloaded)[name].numpy(), err_msg=name)
     zs, zg, plans = (rng.normal(size=(B, n)).astype(np.float32) for n in (D, D, T * A))
-    theirs = Sampler(torch_model).log_prob(*(torch.from_numpy(x) for x in (zs, zg, plans))).numpy()
+    theirs = torch_step_log_probs(torch_model, *(torch.from_numpy(x) for x in (zs, zg, plans))).numpy()
     ours = jax.vmap(lambda s, g, p: jp.step_log_probs(reloaded, s, g, p)[0])(zs, zg, plans)
     np.testing.assert_allclose(np.asarray(ours), theirs, rtol=1e-5, atol=1e-5)
 
@@ -96,7 +97,7 @@ def test_training_is_reproducible_and_seeds_matter():
     """Same seed -> bit-identical weights and losses (CPU); another seed -> a different run.
     The init and training streams of one seed are different keys."""
     def run(seed):
-        model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2, key=init_key(seed))
+        model = jp.GPlanner(state_dim=D, horizon=T * A, action_dim=A, n_components=2, key=init_key(seed))
         rng = np.random.default_rng(0)
         batches = [(rng.normal(size=(B, D)).astype(np.float32), rng.normal(size=(B, D)).astype(np.float32))] * 5
         cfg = TrainConfig(n_samples=2, action_dim=A, grad_clip=10.0, ls_steps=2, ls_every=2)
@@ -121,7 +122,7 @@ def test_mala_draws_from_its_own_random_stream(monkeypatch):
 
     mala = train_module.mala
     monkeypatch.setattr(train_module, "mala", spy)
-    model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, key=init_key(0))
+    model = jp.GPlanner(state_dim=D, horizon=T * A, action_dim=A, key=init_key(0))
     batch = (np.zeros((B, D), np.float32), np.zeros((B, D), np.float32))
     cfg = TrainConfig(n_samples=2, action_dim=A, ls_steps=1)
     train(model, QuadraticCost(), [batch] * 2, 0.5, cfg, seed=0, log_every=10**9)
@@ -145,7 +146,7 @@ def test_beta_schedule():
 
 def test_log_z_head_gets_its_own_learning_rate():
     """Adam's first step moves every parameter by its learning rate (gradient of ones, no clipping)."""
-    model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
+    model = jp.GPlanner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
     params = eqx.filter(model, eqx.is_array)
     optimizer = make_optimizer(model, lr=1e-3, lr_z=1e-1, grad_clip=0.0)
     updates, _ = optimizer.update(jax.tree.map(jnp.ones_like, params), optimizer.init(params), params)
@@ -157,7 +158,7 @@ def test_log_z_head_gets_its_own_learning_rate():
 
 
 def test_gradient_clipping_and_its_stats():
-    model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
+    model = jp.GPlanner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
     params = eqx.filter(model, eqx.is_array)
     grads = jax.tree.map(lambda p: jnp.full_like(p, 3.0), params)
     raw = float(optax.tree.norm(grads))
@@ -167,3 +168,12 @@ def test_gradient_clipping_and_its_stats():
     assert np.isclose(float(stats["grad_norm/global"]), raw / 4)
     assert float(norm_stats(model, grads, grad_clip=0.0)["grad_norm/global"]) == float(stats["grad_norm/global_raw"])
 
+
+
+def test_step_log_prints_every_log_every_steps_and_times_steps(capsys, monkeypatch):
+    monkeypatch.setattr(train_module.wandb, "run", None)
+    log = StepLog(3, lambda step, s: f"step {step} x {s['x']:.1f}")
+    for step in range(7):
+        assert log.step_time() >= 0.0
+        log(step, {"x": float(step)})
+    assert capsys.readouterr().out.splitlines() == ["step 0 x 0.0", "step 3 x 3.0", "step 6 x 6.0"]

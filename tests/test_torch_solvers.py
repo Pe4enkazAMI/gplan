@@ -8,7 +8,7 @@ import torch
 from conftest import A, B, D, IMG, make_wm, T
 
 from gplan.torch.lewm import encode, lewm_cost
-from gplan.torch.policy import GPlaner, Sampler
+from gplan.torch.policy import GPlanner, Sampler
 from gplan.torch.solvers import CostLoggingSolver, GFlowSolver, refine_plans
 
 
@@ -35,7 +35,7 @@ def test_torch_refinement_matches_jax_probe(objective):
 def test_refine_solver_lowers_the_cost_of_the_executed_plan():
     wm = lewm_with_action_effect()
     torch.manual_seed(0)
-    planner = GPlaner(state_dim=D, horizon=T * A, action_dim=A)
+    planner = GPlanner(state_dim=D, horizon=T * A, action_dim=A)
     config = SimpleNamespace(horizon=T, action_block=1)
     info = {"pixels": torch.randn(B, 1, 3, IMG, IMG), "goal": torch.randn(B, 1, 3, IMG, IMG)}
     refine = dict(steps=30, lr=0.05, beta=0.5, reference_var=1.0, objective="cost")
@@ -68,7 +68,7 @@ def test_gflow_solver_owns_its_random_stream():
     """Same seed -> same plans, whatever happened to torch's global random state in between."""
     wm = lewm_with_action_effect()
     torch.manual_seed(0)
-    planner = GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2)
+    planner = GPlanner(state_dim=D, horizon=T * A, action_dim=A, n_components=2)
     config = SimpleNamespace(horizon=T, action_block=1)
     info = {"pixels": torch.randn(B, 1, 3, IMG, IMG), "goal": torch.randn(B, 1, 3, IMG, IMG)}
 
@@ -101,7 +101,7 @@ def test_min_cost_executes_the_cheapest_of_its_samples():
     """Redo the solver's draw by hand (same seed, same generator) and score every sample."""
     wm, info, N = lewm_with_action_effect(), frames(), 6
     torch.manual_seed(0)
-    sampler = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
+    sampler = Sampler(GPlanner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
     out = configured(GFlowSolver(wm, sampler, num_samples=N, select="min-cost", seed=11)).solve(info)
 
     zs = encode(wm, info["pixels"][:, -1]).repeat_interleave(N, 0)
@@ -115,7 +115,7 @@ def test_min_cost_executes_the_cheapest_of_its_samples():
 def test_sample_and_mean_execute_a_single_unscored_plan():
     wm, info = lewm_with_action_effect(), frames()
     torch.manual_seed(0)
-    sampler = Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
+    sampler = Sampler(GPlanner(state_dim=D, horizon=T * A, action_dim=A, n_components=2))
     mean = configured(GFlowSolver(wm, sampler, num_samples=64, select="mean"))
     assert mean.num_samples == 1 and mean.plans_per_replan == 0 == mean.backward_per_replan
     zs, zg = encode(wm, info["pixels"][:, -1]), encode(wm, info["goal"][:, -1])
@@ -128,7 +128,7 @@ def test_sample_and_mean_execute_a_single_unscored_plan():
 def test_cost_logging_records_what_was_executed():
     wm = lewm_with_action_effect()
     torch.manual_seed(0)
-    inner = GFlowSolver(wm, Sampler(GPlaner(state_dim=D, horizon=T * A, action_dim=A)), num_samples=4)
+    inner = GFlowSolver(wm, Sampler(GPlanner(state_dim=D, horizon=T * A, action_dim=A)), num_samples=4)
     logged = configured(CostLoggingSolver(inner, wm))
     outs = [logged.solve(frames(seed)) for seed in (0, 1)]  # two replanning steps
     for out, cost, absmax, seed in zip(outs, logged.costs, logged.action_absmax, (0, 1)):

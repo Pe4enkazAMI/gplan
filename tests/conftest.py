@@ -1,4 +1,5 @@
-"""Shared fixtures: a tiny random LeWorldModel and a GPlaner, small enough to run on CPU in seconds."""
+"""Shared fixtures: a tiny random LeWorldModel and a GPlanner, small enough to run on CPU in seconds, and
+PyTorch references for the JAX policy."""
 
 import os
 
@@ -12,20 +13,41 @@ if os.environ.get("GPLAN_TESTS_ON_GPU") != "1":
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # PyTorch: no CUDA context either
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
+import importlib.util  # noqa: E402
+from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
 import pytest
 import torch
 import torch.nn as nn
+from torch.distributions import Categorical, Independent, MixtureSameFamily, Normal
 
 import gplan.torch.lewm  # noqa: F401  puts the le-wm submodule on sys.path
-from gplan.torch.policy import GPlaner, Sampler
+from gplan.torch.policy import Sampler
 
 # isort: split
 from jepa import JEPA  # le-wm modules, importable once gplan.torch.lewm is imported
 from module import ARPredictor, Embedder, MLP
 
 B, T, A, D, HS, IMG = 4, 3, 2, 16, 3, 8  # batch, horizon, action dim, embed dim, history, image size
+REPO = Path(__file__).resolve().parents[1]
+
+
+def load_script(name):
+    """scripts/<name>.py as a module, without running its main()."""
+    spec = importlib.util.spec_from_file_location(name, REPO / "scripts" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def script_env(home=None):
+    """Environment of a scripts/*.py subprocess: this process's (CPU only, see above), the repository and
+    tests/ on PYTHONPATH (the tiny LeWM checkpoints pickle conftest's classes), and STABLEWM_HOME=home."""
+    env = {**os.environ, "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}"}
+    if home is not None:
+        env["STABLEWM_HOME"] = str(home)
+    return env
 
 try:
     import jax
@@ -63,11 +85,23 @@ def wm():
     return model.eval().requires_grad_(False)
 
 
-@pytest.fixture
-def sampler():
-    """Scalar layout (action_dim=1): one autoregressive step per action component."""
-    torch.manual_seed(0)
-    return Sampler(GPlaner(state_dim=D, horizon=T * A))
+def torch_mixture(dist):
+    """A step distribution of the PyTorch GPlanner as a torch.distributions object (an independent
+    implementation of the mixture density)."""
+    return MixtureSameFamily(Categorical(logits=dist.log_weights), Independent(Normal(dist.means, dist.stds), 1))
+
+
+def torch_step_log_probs(model, z_start, z_goal, plans):
+    """Reference for `gplan.jax.policy.step_log_probs`: teacher-forced log P_F of every step of `plans`
+    (B, horizon) under the PyTorch GPlanner `model`, scored with torch.distributions. -> (B, n_steps)"""
+    sampler, A = Sampler(model), model.action_dim
+    return torch.stack([torch_mixture(sampler.action_dist(z_start, z_goal, plans, t)).log_prob(plans[:, t * A:(t + 1) * A])
+                        for t in range(model.n_steps)], dim=-1)
+
+
+def torch_log_z(model, z_start, z_goal):
+    """Reference for `GPlanner.log_Z` (JAX): the PyTorch GPlanner's log Z head, summed. -> (B,)"""
+    return model.Z(torch.cat([z_start, z_goal], dim=-1)).sum(-1)
 
 
 @pytest.fixture

@@ -13,13 +13,13 @@ import equinox as eqx
 import jax
 import torch
 
-from gplan.jax.convert import gplaner_to_torch
-from gplan.jax.policy import GPlaner
+from gplan.jax.convert import gplanner_to_torch
+from gplan.jax.policy import GPlanner
 
 
 def export_torch(path, model, model_kwargs, train_args=None):
     """Write `model` as a `gplan.torch.policy.save_planner`-style .pt file."""
-    torch.save({"state_dict": gplaner_to_torch(model), "model_kwargs": model_kwargs, "train_args": train_args}, path)
+    torch.save({"state_dict": gplanner_to_torch(model), "model_kwargs": model_kwargs, "train_args": train_args}, path)
 
 
 def save(prefix, model, model_kwargs, train_args=None):
@@ -33,6 +33,6 @@ def save(prefix, model, model_kwargs, train_args=None):
 def load(prefix):
     """Returns (model, model_kwargs, train_args)."""
     meta = json.loads(Path(f"{prefix}.json").read_text())
-    skeleton = GPlaner(**meta["model_kwargs"], key=jax.random.key(0))
+    skeleton = GPlanner(**meta["model_kwargs"], key=jax.random.key(0))
     model = eqx.tree_deserialise_leaves(f"{prefix}.eqx", skeleton)
     return model, meta["model_kwargs"], meta["train_args"]

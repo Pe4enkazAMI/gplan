@@ -2,7 +2,6 @@
 real workflow on a toy STABLEWM_HOME (an 8x8-pixel dataset and the tiny LeWM from conftest)."""
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,21 +10,18 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import IMG, make_wm
+from conftest import IMG, make_wm, REPO, script_env
 
 from gplan.torch.policy import load_planner
 
-REPO = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.slow
 EMBED, ENV_ACTION_DIM, FRAMESKIP = 16, 2, 5
 
 
 def run(args, home=None, timeout=600):
     """Run a script (or `-c` code) in a fresh interpreter; returns stdout."""
-    env = {**os.environ, "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}"}
-    if home is not None:
-        env["STABLEWM_HOME"] = str(home)
-    proc = subprocess.run([sys.executable, *args], env=env, capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run([sys.executable, *args], env=script_env(home), capture_output=True, text=True,
+                          timeout=timeout)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
     return proc.stdout
 
@@ -79,7 +75,7 @@ def trained(home, latents, tmp_path_factory):
 
 @pytest.mark.parametrize("method, extra", [("bc", []), ("map", []), ("ppo", ["--ent-coef", "1", "--target-kl", "0.02"])])
 def test_train_baselines(home, latents, tmp_path, method, extra):
-    """Each baseline trains a few steps and exports a planner evaluate.py loads (a GPlaner of the same shape)."""
+    """Each baseline trains a few steps and exports a planner evaluate.py loads (a GPlanner of the same shape)."""
     out = tmp_path / method
     run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"), "--method", method,
          "--n-batches", "3", "--batch-size", "4", "--beta", "1", "--holdout-frac", "0.34", "--wandb-mode", "disabled",
@@ -118,10 +114,10 @@ def test_train_infers_a_25_value_plan_step_from_5d_actions(home, cube_like, tmp_
 
 def test_train_refuses_a_plan_step_the_lewm_cannot_read(home, cube_like, tmp_path):
     """--frameskip 2 x 5-d actions = 10 values, but the LeWM action encoder takes 25: a clear error."""
-    env = {**os.environ, "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}", "STABLEWM_HOME": str(home)}
     proc = subprocess.run([sys.executable, script("train.py"), "--dataset", "ogbench/toy5", "--ckpt", str(cube_like),
                            "--frameskip", "2", "--n-batches", "1", "--wandb-mode", "disabled",
-                           "--out", str(tmp_path / "x")], env=env, capture_output=True, text=True, timeout=600)
+                           "--out", str(tmp_path / "x")], env=script_env(home), capture_output=True, text=True,
+                          timeout=600)
     assert proc.returncode != 0 and "action encoder takes 25" in proc.stdout + proc.stderr, proc.stderr[-2000:]
 
 

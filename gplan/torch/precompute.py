@@ -16,19 +16,9 @@ import h5py
 import hdf5plugin  # noqa: F401  registers the compression filter used by the LeWM .h5 files
 import numpy as np
 import torch
-from torchvision.transforms import v2 as transforms
 
 from gplan.data import episode_column
-from gplan.torch.lewm import encode, IMAGENET
-
-
-def batch_transform(img_size=224):
-    """Same preprocessing as `gplan.torch.lewm.img_transform`, applied to a (B, C, H, W) uint8 batch."""
-    return transforms.Compose([
-        transforms.ToDtype(torch.float32, scale=True),
-        transforms.Normalize(**IMAGENET),
-        transforms.Resize(size=img_size),
-    ])
+from gplan.torch.lewm import encode, img_transform
 
 
 def cache_info(ckpt_path, h5_path, img_size):
@@ -43,7 +33,7 @@ def encode_dataset(wm, h5_path, out_prefix, info, batch_size=256, img_size=224, 
     """Encode every frame of `h5_path` with the frozen LeWM `wm` and write the three output files."""
     out_prefix = Path(out_prefix)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
-    transform = batch_transform(img_size)
+    transform = img_transform(img_size, batch=True)
 
     with h5py.File(h5_path, "r") as h5:
         pixels = h5["pixels"]  # (N, H, W, C) uint8

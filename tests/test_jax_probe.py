@@ -39,7 +39,7 @@ def test_refine_lowers_the_lewm_cost():
 
 def test_probe_runs_and_refinement_helps_on_average():
     lewm = lewm_with_action_effect()
-    planner = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
+    planner = jp.GPlanner(state_dim=D, horizon=T * A, action_dim=A, key=jax.random.key(0))
     # objective="cost": with "target" the prior term may rightly trade a little J for smaller actions
     probe = make_probe(planner, lewm, (T, A), n_samples=8, beta=0.5, reference_var=1.0, steps=30, lr=0.05,
                        objective="cost")

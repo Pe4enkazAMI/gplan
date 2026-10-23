@@ -2,7 +2,7 @@
 
 GFlowNet samplers as amortized planners for [LeWorldModel](https://github.com/lucas-maes/le-wm) (LeWM).
 
-A goal-conditioned autoregressive policy, `GPlaner`, learns to sample action plans from
+A goal-conditioned autoregressive policy, `GPlanner`, learns to sample action plans from
 
     P*(A | z_start, z_goal)  ∝  exp(-β · J(A)) · N(A; 0, s² I)
 
@@ -24,14 +24,14 @@ gplan/
   torch/             PyTorch: everything that needs the original LeWM
     lewm.py            load, encode frames, planning cost J (reference implementation)
     precompute.py      encode every dataset frame into latents for training
-    distributions.py   DiagGaussianMixture (twin of gplan/jax/distributions.py)
-    policy.py          GPlaner + Sampler used at evaluation, PriorSampler (baselines), checkpoint I/O
+    distributions.py   DiagGaussianMixture sampling (the policy's step distribution at evaluation)
+    policy.py          GPlanner + Sampler used at evaluation, PriorSampler (baselines), checkpoint I/O
     solvers.py         GFlowNet best-of-N solver (+ test-time refinement), cost logging
     evaluation.py      the LeWM protocol: TwoRoom / PushT / Reacher / Cube presets, normalizers, start sampling
   jax/               JAX: training
     lewm.py            the LeWM predictor in Equinox and J (checked against PyTorch)
     distributions.py   DiagGaussianMixture, normal / reference log-probs
-    policy.py          GPlaner, sampling, teacher-forced step log-probs
+    policy.py          GPlanner, sampling, teacher-forced step log-probs
     losses.py          Trajectory Balance on xi = log P_F + β'J − log N(A), diagnostics
     mala.py            MALA local search on plans (off-policy training samples)
     baselines.py       behavior cloning and amortized MAP planning with the same network
@@ -39,7 +39,7 @@ gplan/
     latents.py         (start, goal) pairs from the precomputed latents, expert plans between them
     train.py           optimizer, jitted train step, training loop, random streams
     probe.py           headroom probe: gradient refinement of sampled plans through LeWM
-    convert.py         weights PyTorch <-> Equinox (LeWM predictor, GPlaner)
+    convert.py         weights PyTorch <-> Equinox (LeWM predictor, GPlanner)
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
 scripts/             convert_lewm, download_data, encode_dataset, train, export_planner, evaluate,
                      aggregate_results, probe_headroom
@@ -149,7 +149,7 @@ Every policy has its own settings, so CEM always runs the LeWM paper configurati
 | Flag | Meaning |
 | --- | --- |
 | `--policy gflow gflow-refine cem prior prior-refine random` | policies, run in this order on the same episodes |
-| `--gflow-samples N` (64) | plans drawn from the GPlaner per replanning step |
+| `--gflow-samples N` (64) | plans drawn from the GPlanner per replanning step |
 | `--gflow-select min-cost \| sample \| mean` | execute the cheapest of N, one sample, or the most likely mode |
 | `--refine-steps / --refine-lr / --refine-objective` | `gflow-refine` / `prior-refine`: Adam steps on the actions through LeWM before picking the cheapest |
 | `--prior-samples N` (64) `--prior-var` (1) | `prior`: best-of-N random shooting from N(0, s² I); `prior-refine`: the same plans refined like `gflow-refine` (the control for it) |
@@ -222,8 +222,9 @@ python scripts/export_planner.py outputs/pusht
 
 ## Reproducibility
 
-- **Seeds.** `train.py --seed` derives two independent streams: one for the initial weights, one
-  for everything sampled in training (plans, MALA). `evaluate.py --seed` picks the episodes and
+- **Seeds.** `train.py --seed` derives independent random streams: the initial weights, the
+  on-policy plans, MALA's proposals and accept decisions, PPO's critic weights (`gplan/jax/train.py`).
+  `evaluate.py --seed` picks the episodes and
   seeds CEM's and GFlow's own random generators, so a policy's result does not depend on the
   others evaluated with it.
 - **GPU determinism.** On CPU, reruns are bit-identical. On GPU use `--deterministic` in
@@ -250,7 +251,7 @@ JAX process would reserve 75% of GPU memory, which on the GB10's shared memory f
 process peaks at about 2.6 GB.
 
 JAX code is checked against the PyTorch code on identical weights (cost, policy, losses and
-gradients), the PyTorch probability code against `torch.distributions`, the losses against the
+gradients), the JAX densities against `torch.distributions`, the losses against the
 closed-form optimum (exactly 0 there for any plan, `tests/test_jax_optimum.py`), training against
 that optimum from a random init (TB, with and without MALA), and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
 (CEM identical whatever GFlow checkpoint runs next to it, every policy reproducible).

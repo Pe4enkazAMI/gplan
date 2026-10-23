@@ -1,33 +1,30 @@
 """End to end: scripts/evaluate.py on a tiny real stable_worldmodel setup (CPU, about a minute).
 
 A short TwoRoom dataset is recorded with a random policy, LeWM is the tiny random model from
-conftest (8x8 frames, so --img-size 8), and the GFlow checkpoints are untrained GPlaners. The
+conftest (8x8 frames, so --img-size 8), and the GFlow checkpoints are untrained GPlanners. The
 numbers mean nothing; what is checked is that the evaluation is reproducible and that CEM does
 not depend on anything GFlow-related.
 """
 
 import json
-import os
 import shutil
 import subprocess
 import sys
 import types
-from pathlib import Path
 
 import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import make_wm
+from conftest import make_wm, REPO, script_env
 
 swm = pytest.importorskip("stable_worldmodel")
 from gplan.data import episode_column, split_episodes  # noqa: E402
 from gplan.results import comparison_table, group_runs, load_runs  # noqa: E402
 from gplan.torch.evaluation import evaluate as run_protocol  # noqa: E402
 from gplan.torch.evaluation import sample_eval_starts, TASKS  # noqa: E402
-from gplan.torch.policy import GPlaner, save_planner  # noqa: E402
+from gplan.torch.policy import GPlanner, save_planner  # noqa: E402
 
-REPO = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.slow
 EMBED, ACTION_DIM = 16, 10  # 10 = frameskip 5 x 2-d env actions
 
@@ -53,10 +50,10 @@ def home(tmp_path_factory):
     for name, seed, n_components in (("gauss", 1, 1), ("mixture", 2, 3)):
         torch.manual_seed(seed)
         kwargs = dict(state_dim=EMBED, horizon=5 * ACTION_DIM, action_dim=ACTION_DIM, n_components=n_components)
-        save_planner(home / f"{name}.pt", GPlaner(**kwargs), kwargs, train_args={"beta": 90.0})
+        save_planner(home / f"{name}.pt", GPlanner(**kwargs), kwargs, train_args={"beta": 90.0})
     # trained (nominally) with half of toy_tworoom's episodes held out
     split_args = {"beta": 90.0, "dataset": "toy_tworoom", "holdout_frac": 0.5, "split_seed": 0}
-    save_planner(home / "gauss_split.pt", GPlaner(**kwargs), kwargs, train_args=split_args)
+    save_planner(home / "gauss_split.pt", GPlanner(**kwargs), kwargs, train_args=split_args)
     return home
 
 
@@ -65,11 +62,10 @@ def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom", wm="t
     """Run scripts/evaluate.py in a fresh process (as on the cluster); returns the policies of the
     --results-json (the whole file with full=True, the console output with expect_failure=True)."""
     out = tmp_path / f"results_{len(list(tmp_path.glob('results_*')))}.json"
-    env = {**os.environ, "STABLEWM_HOME": str(home), "PYTHONPATH": f"{REPO}{os.pathsep}{REPO / 'tests'}"}
     cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), "--task", task, "--wm", wm,
            "--dataset", dataset, "--num-eval", "4", "--img-size", "8", "--device", "cpu",
            "--wandb-mode", "disabled", "--results-json", str(out), *args]
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
+    proc = subprocess.run(cmd, env=script_env(home), capture_output=True, text=True, timeout=600)
     if expect_failure:
         assert proc.returncode != 0
         return proc.stdout + proc.stderr
@@ -174,7 +170,7 @@ def mujoco_home(tmp_path_factory):
                    home / f"toy_{name}" / "lewm_object.ckpt")
         torch.manual_seed(0)
         kwargs = dict(state_dim=EMBED, horizon=5 * 5 * env_dim, action_dim=5 * env_dim, n_components=2)
-        save_planner(home / f"{name}.pt", GPlaner(**kwargs), kwargs, train_args={"beta": 90.0})
+        save_planner(home / f"{name}.pt", GPlanner(**kwargs), kwargs, train_args={"beta": 90.0})
     return home
 
 

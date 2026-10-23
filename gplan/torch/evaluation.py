@@ -22,7 +22,7 @@ import numpy as np
 import stable_worldmodel as swm
 import torch
 
-from gplan.data import episode_column, split_episodes, valid_start_rows
+from gplan.data import episode_column, split_episodes, STABLEWM_HOME, valid_start_rows
 from gplan.torch.lewm import img_transform
 from gplan.torch.policy import PriorSampler, Sampler
 from gplan.torch.solvers import CostLoggingSolver, GFlowSolver
@@ -161,7 +161,7 @@ def build_policy(name, args, wm, process, planner, refine=None):
                "backward_per_replan": backward passes through it (refine policies only)}.
     "gflow" uses --gflow-select; "gflow-refine" is best-of-N after test-time refinement with the
     `refine` settings (see gplan.torch.solvers.refine_plans). "prior" / "prior-refine" do the same with
-    --prior-samples plans from N(0, --prior-var I) instead of the GPlaner: random shooting, and
+    --prior-samples plans from N(0, --prior-var I) instead of the GPlanner: random shooting, and
     gradient planning from random starts (the control for gflow-refine)."""
     if name == "random":
         return swm.policy.RandomPolicy(seed=args.seed), None, {"plans_per_replan": 0, "backward_per_replan": 0}
@@ -220,3 +220,56 @@ def evaluate(name, policy, args, task, dataset, episodes, start_steps):
     world.close()
     return {"success_rate": float(results["success_rate"]), "eval_time_s": eval_time,
             "episode_successes": np.asarray(results["episode_successes"], dtype=bool)}
+
+
+# ----------------------------------------------------------------------------- a planner's protocol
+
+def check_planner_matches(planner, train_args, args, env_action_dim):
+    """Stop on train / eval protocol mismatches (dataset, LeWM checkpoint, goal offset, plan steps,
+    frameskip; warnings instead with --allow-mismatch) and assert the plan layout fits the env."""
+    if train_args is not None:
+        mismatches = [f"planner was trained with {k}={train_args[k]} but eval uses {eval_v}"
+                      for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon),
+                                        ("dataset", args.dataset), ("frameskip", args.action_block))
+                      if k in train_args and train_args[k] != eval_v]
+        eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
+        if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
+            mismatches.append(f"planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
+        if mismatches and not args.allow_mismatch:
+            raise SystemExit("ERROR: " + "; ".join(mismatches) + " (--allow-mismatch to evaluate anyway)")
+        for msg in mismatches:
+            print(f"WARNING: {msg}")
+    if (train_args or {}).get("method") == "map" and args.gflow_select != "mean":
+        print("WARNING: a --method map planner is trained for one plan per condition (its stds are untrained); "
+              "evaluate it with --gflow-select mean")
+    action_dim = env_action_dim * args.action_block
+    assert planner.horizon == args.horizon * action_dim, (
+        f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")
+
+
+def check_no_leakage(dataset, episodes, train_args, args):
+    """Evaluating on episodes the planner trained on is an error with a held-out split and a warning
+    under the LeWM protocol (--holdout-frac 0), where it is unavoidable for a planner trained on all."""
+    if (train_args or {}).get("dataset", args.dataset) != args.dataset:
+        return  # different datasets (allowed by --allow-mismatch): episode ids do not correspond
+    seen = trained_on(dataset, episodes, train_args)
+    if not seen:
+        return
+    msg = (f"{len(set(seen))} of the {len(set(episodes))} evaluation episodes were in the planner's training data "
+           f"(planner: holdout_frac={(train_args or {}).get('holdout_frac', 0.0)}, "
+           f"split_seed={(train_args or {}).get('split_seed', 0)}; eval: --holdout-frac {args.holdout_frac} "
+           f"--split-seed {args.split_seed})")
+    if args.holdout_frac > 0:
+        raise SystemExit(f"ERROR: {msg}. Evaluate with the planner's split, or train with this one.")
+    print(f"WARNING: {msg}")
+
+
+def refine_settings(args, train_args, d):
+    """Settings shared by gflow-refine and prior-refine; beta and s^2 default to the planner's training
+    values (s^2 = --prior-var without a planner). d: LeWM embedding dim (beta is per dim)."""
+    train_args = train_args or {}
+    beta = args.refine_beta if args.refine_beta is not None else train_args.get("beta")
+    if args.refine_objective == "target" and beta is None:
+        raise ValueError("--refine-beta is needed: no planner, or its checkpoint does not record its training beta")
+    return dict(steps=args.refine_steps, lr=args.refine_lr, objective=args.refine_objective,
+                beta=(beta or 0.0) / d, reference_var=train_args.get("ref_var", args.prior_var))

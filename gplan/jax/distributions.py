@@ -1,4 +1,5 @@
-"""The probability distributions the planner uses, in JAX (twin of `gplan.torch.distributions`).
+"""The probability distributions the planner uses, in JAX (`gplan.torch.distributions` has the sampling
+part in PyTorch, for evaluation).
 
     normal_log_prob(x, mean, std)       elementwise log N(x; mean, std^2)
     reference_log_prob(actions, var)    log N(A; 0, s^2 I) of a whole plan buffer

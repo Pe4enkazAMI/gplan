@@ -1,8 +1,8 @@
-"""PPO baseline: the same GPlaner trained as an RL policy (PPO-clip with GAE and a learned critic).
+"""PPO baseline: the same GPlanner trained as an RL policy (PPO-clip with GAE and a learned critic).
 
 Planning a 5-step plan for one (start, goal) is an episode:
     state   s_t = (z_start, z_goal, plan steps < t)                    t = 0 .. n_steps - 1
-    action  a_t = plan step t (action_dim values), drawn from the GPlaner
+    action  a_t = plan step t (action_dim values), drawn from the GPlanner
     reward  r_t = log N(a_t; 0, s^2 I)   (reward="target"; 0 for reward="cost")
                   - c log pi(a_t | s_t)  (entropy, c = ent_coef; see below)
                   - beta J(A)            (at the last step only; J is the LeWM cost of the whole plan)
@@ -23,10 +23,9 @@ One iteration (Schulman et al. 2017; the structure of CleanRL's ppo_continuous_a
                  minibatch, global-norm gradient clipping, one Adam over policy and critic; optionally
                  the remaining epochs are skipped once an epoch's approx KL exceeds target_kl
 The critic is a separate MLP; only the policy is exported (scripts/evaluate.py samples it like any
-GPlaner).
+GPlanner).
 """
 
-import time
 from dataclasses import dataclass
 from functools import partial
 
@@ -34,11 +33,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import optax
-import wandb
 
 from gplan.jax.distributions import normal_log_prob
 from gplan.jax.policy import rollout, step_log_probs
-from gplan.jax.train import CRITIC_STREAM, TRAIN_STREAM
+from gplan.jax.train import CRITIC_STREAM, host_stats, StepLog, TRAIN_STREAM
 
 
 def critic_key(seed):
@@ -70,7 +68,7 @@ class Critic(eqx.Module):
     n_steps: int = eqx.field(static=True)
 
     def __init__(self, state_dim, horizon, n_steps, hidden_size=64, n_layers=2, *, key):
-        width = 3 * hidden_size  # as the GPlaner
+        width = 3 * hidden_size  # as the GPlanner
         sizes = [2 * state_dim + horizon + n_steps] + [width] * (n_layers + 1) + [1]
         keys = jax.random.split(key, len(sizes) - 1)
         self.layers = [eqx.nn.Linear(i, o, key=k) for i, o, k in zip(sizes[:-1], sizes[1:], keys)]
@@ -138,7 +136,8 @@ def ppo_loss(params, batch, cfg: PPOConfig):
     return pg_loss + cfg.vf_coef * v_loss, stats
 
 
-def make_optimizer(lr, grad_clip):
+def make_ppo_optimizer(lr, grad_clip):
+    """Global-norm clipping, then one Adam over the policy and the critic (no separate log Z rate)."""
     clip = optax.clip_by_global_norm(grad_clip) if grad_clip > 0 else optax.identity()
     return optax.chain(clip, optax.adam(lr))
 
@@ -216,28 +215,23 @@ def train_ppo(policy, critic, cost_model, batches, beta, cfg: PPOConfig, lr=3e-4
 
     `seed` drives rollouts and minibatch shuffling (stream TRAIN_STREAM, as for the GFlowNet);
     initialize the policy with `gplan.jax.train.init_key(seed)` and the critic with `critic_key(seed)`."""
-    optimizer = make_optimizer(lr, cfg.grad_clip)
+    optimizer = make_ppo_optimizer(lr, cfg.grad_clip)
     params = (policy, critic)
     opt_state = optimizer.init(eqx.filter(params, eqx.is_array))
     iteration = make_iteration(optimizer, cfg)
     key = jax.random.fold_in(jax.random.key(seed), TRAIN_STREAM)
 
-    plan_returns, t_prev = [], time.perf_counter()
+    log = StepLog(log_every, lambda step, s: (
+        f"iter {step:5d}  return {s['ppo/return']:.3f}  cost {s['cost/mean']:.3f}  "
+        f"value_loss {s['ppo/value_loss']:.3f}  kl {s['ppo/approx_kl']:.4f}  clip_frac {s['ppo/clip_frac']:.3f}  "
+        f"epochs {s['ppo/epochs_run']:.0f}  std {s['policy/std']:.3f}  explained_var {s['ppo/explained_var']:.3f}"))
+    plan_returns = []
     for step, (z_start, z_goal) in enumerate(batches):
         key, step_key = jax.random.split(key)
         params, opt_state, stats = iteration(params, opt_state, cost_model, step_key, z_start, z_goal,
                                              jnp.float32(beta))
-        stats = {k: float(v) for k, v in jax.device_get(stats).items()}
+        stats = host_stats(stats)
         plan_returns.append(stats["ppo/return"])
-        t_now = time.perf_counter()
-        stats.update({"optim/lr": lr, "time/step_s": t_now - t_prev})
-        t_prev = t_now
-        if wandb.run is not None:
-            wandb.log(stats, step=step)
-        if step % log_every == 0:
-            print(f"iter {step:5d}  return {stats['ppo/return']:.3f}  cost {stats['cost/mean']:.3f}  "
-                  f"value_loss {stats['ppo/value_loss']:.3f}  kl {stats['ppo/approx_kl']:.4f}  "
-                  f"clip_frac {stats['ppo/clip_frac']:.3f}  epochs {stats['ppo/epochs_run']:.0f}  "
-                  f"std {stats['policy/std']:.3f}  "
-                  f"explained_var {stats['ppo/explained_var']:.3f}")
+        stats.update({"optim/lr": lr, "time/step_s": log.step_time()})
+        log(step, stats)
     return params[0], params[1], plan_returns

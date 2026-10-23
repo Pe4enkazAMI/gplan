@@ -1,7 +1,7 @@
 """The losses are exactly zero at the closed-form optimum, for any plan (deterministic, no training).
 
 With J(A) = ||A||^2 and the reference N(0, s^2 I), the target P*(A) ∝ exp(-beta J) N(A; 0, s^2 I) is
-N(0, sigma^2 I) with 1 / sigma^2 = 2 beta + 1 / s^2, and log Z = -(H / 2) log(1 + 2 beta s^2). A GPlaner
+N(0, sigma^2 I) with 1 / sigma^2 = 2 beta + 1 / s^2, and log Z = -(H / 2) log(1 + 2 beta s^2). A GPlanner
 whose every step is that Gaussian and whose log Z head outputs that constant makes the TB residual
     log Z + log P_F(A) + beta J(A) - log N(A)
 vanish for EVERY plan A, on-policy or not: the quadratic terms and the constants cancel. So TB is
@@ -31,9 +31,9 @@ LOG_Z = -H / 2 * math.log(1 + 2 * BETA * S2)
 
 
 def optimal_planer(n_components, std=math.sqrt(SIGMA2), log_z=LOG_Z):
-    """A GPlaner that ignores its inputs: every step is N(0, std^2) (all mixture components equal,
+    """A GPlanner that ignores its inputs: every step is N(0, std^2) (all mixture components equal,
     arbitrary weights) and log Z(c) = log_z."""
-    model = jp.GPlaner(state_dim=D, horizon=H, action_dim=A, n_components=n_components, key=jax.random.key(0))
+    model = jp.GPlanner(state_dim=D, horizon=H, action_dim=A, n_components=n_components, key=jax.random.key(0))
     lo, hi = model.log_std_min, model.log_std_max
     raw_std = math.atanh(2 * (math.log(std) - lo) / (hi - lo) - 1)  # inverts the tanh squash
     K = n_components

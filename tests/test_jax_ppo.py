@@ -80,7 +80,7 @@ def run_ppo(cost, cfg, iters, seed=0, n_cond=64):
     """PPO on a fixed batch of `n_cond` random conditions (blocked layout: T steps of A values);
     returns (policy, critic, per-iteration plan returns, conditions repeated n_samples times)."""
     H = T * A
-    policy = jp.GPlaner(state_dim=D, horizon=H, action_dim=A, key=init_key(seed))
+    policy = jp.GPlanner(state_dim=D, horizon=H, action_dim=A, key=init_key(seed))
     critic = Critic(D, H, T, key=critic_key(seed))
     rng = np.random.default_rng(seed)
     batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))

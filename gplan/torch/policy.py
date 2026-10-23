@@ -1,13 +1,16 @@
-"""Goal-conditioned autoregressive action planner (GPlaner), its sampler, and checkpoint I/O."""
+"""Goal-conditioned autoregressive action planner (GPlanner) as evaluation samples it, and checkpoint I/O.
+
+Training is in JAX (`gplan.jax`); this is the same network in PyTorch, for the swm solvers. Weights
+convert both ways (`gplan.jax.convert`)."""
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from gplan.torch.distributions import DiagGaussianMixture, reference_log_prob
+from gplan.torch.distributions import DiagGaussianMixture
 
 
-class GPlaner(nn.Module):
+class GPlanner(nn.Module):
     """Predicts a mixture of ``n_components`` diagonal Gaussians over the next world-model action
     (``n_components=1``, the default, is a single diagonal Gaussian).
 
@@ -45,16 +48,13 @@ class GPlaner(nn.Module):
         # plain Gaussian layout, so older checkpoints load unchanged)
         n_out = 2 * action_dim if n_components == 1 else n_components * (2 * action_dim + 1)
         self.out_proj = nn.Linear(width, n_out)
-        # log-partition function log Z(start, goal); the 64 outputs are summed into one scalar
+        # log-partition function log Z(start, goal) of the GFlowNet (64 outputs, summed): trained in JAX and
+        # unused at evaluation, kept so the checkpoints load unchanged
         self.Z = nn.Sequential(nn.Linear(2 * state_dim, state_dim), nn.ReLU(), nn.Linear(state_dim, 64))
 
     def squash_log_std(self, x):
         """Map an unbounded head output to log_std in [log_std_min, log_std_max] via tanh."""
         return self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (torch.tanh(x) + 1.0)
-
-    def log_Z(self, start_state, goal_state):
-        """Log-partition function of the GFlowNet, conditioned on (start, goal). Shape (B,)."""
-        return self.Z(torch.cat([start_state, goal_state], dim=-1)).sum(-1)
 
     def forward(self, start_state, goal_state, actions):
         """
@@ -79,21 +79,20 @@ class GPlaner(nn.Module):
         return DiagGaussianMixture.from_logits(logits, means, torch.exp(self.squash_log_std(raw_std)))
 
 
+GPlaner = GPlanner  # the former name, for scripts that still import it
+
+
 class Sampler:
-    """Autoregressively fills a fixed-length action buffer using a ``GPlaner``.
+    """Autoregressively fills a fixed-length action buffer using a ``GPlanner``.
 
     The buffer has shape (B, horizon) = (B, n_steps * action_dim). At step ``t``
     the model sees the buffer with steps ``0..t-1`` (slots ``0..t*action_dim-1``)
     filled and everything after zeroed, predicts a Gaussian mixture over the
     ``action_dim`` values of step ``t``, and the sample is written to those slots.
-
-    ``reference_var`` is the variance s^2 of the N(0, s^2 I) reference measure
-    (the prior over action buffers in the target distribution).
     """
 
-    def __init__(self, model: GPlaner, reference_var=1.0) -> None:
+    def __init__(self, model: GPlanner) -> None:
         self.model = model
-        self.reference_var = reference_var
 
     @property
     def n_steps(self):
@@ -116,63 +115,31 @@ class Sampler:
 
         Slots at index ``>= step * action_dim`` are zeroed before being fed to the
         model, so it never sees the action it is asked to predict or anything after.
-        The returned distribution has event shape (action_dim,): ``sample()`` is
-        (B, action_dim) and ``log_prob(x)`` is (B,).
+        The returned distribution has event shape (action_dim,): ``sample()`` is (B, action_dim).
         """
         visible = torch.arange(actions.shape[1], device=actions.device) < step * self.action_dim
         return self.model(start_state, goal_state, actions * visible.to(actions.dtype))
 
     @torch.no_grad()
-    def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample", generator=None):
-        """Fill steps ``n_given..n_steps-1`` of the action buffer.
+    def rollout(self, start_state, goal_state, mode="sample", generator=None):
+        """Sample a plan per row, step by step, starting from an all-zero buffer.
 
         Args:
             start_state: (B, state_dim)
             goal_state:  (B, state_dim)
-            actions:     (B, horizon) buffer whose first ``n_given`` steps are
-                         already filled. Defaults to an all-zero buffer.
-            n_given:     number of leading steps to keep as they are.
             mode:        "sample" draws from the policy; "mean" writes the mean of
                          the most likely component at every step (deterministic plan).
             generator:   torch.Generator for the draws (default: torch's global one).
 
         Returns:
-            (B, horizon) buffer with every slot filled. The input is not modified.
+            (B, horizon) buffer with every slot filled.
         """
         assert mode in ("sample", "mean"), mode
-        if actions is None:
-            actions = start_state.new_zeros(start_state.shape[0], self.model.horizon)
-        actions = actions.clone()
-        for t in range(n_given, self.n_steps):
+        actions = start_state.new_zeros(start_state.shape[0], self.model.horizon)
+        for t in range(self.n_steps):
             dist = self.action_dist(start_state, goal_state, actions, step=t)
             actions[:, self._slots(t)] = dist.sample(generator) if mode == "sample" else dist.mode()
         return actions
-
-    def log_prob(self, start_state, goal_state, actions, n_given=0):
-        """Log-probability of each step of ``actions`` under the current model.
-
-        Uses teacher forcing: step ``t`` is scored against the distribution the model
-        predicts from the true steps ``0..t-1`` (later steps masked), exactly as
-        the buffer looked when step ``t`` was sampled in ``rollout``. Works for any
-        buffer, not only the model's own samples. Differentiable w.r.t. the model.
-
-        Args:
-            actions: (B, horizon) fully filled buffer.
-            n_given: number of leading steps that were given rather than sampled; not scored.
-
-        Returns:
-            (B, n_steps - n_given) per-step log-probabilities (each summed over the
-            step's ``action_dim`` components). Sum over the last dim for the whole plan.
-        """
-        log_probs = []
-        for t in range(n_given, self.n_steps):
-            dist = self.action_dist(start_state, goal_state, actions, step=t)
-            log_probs.append(dist.log_prob(actions[:, self._slots(t)]))
-        return torch.stack(log_probs, dim=-1)
-
-    def reference_log_prob(self, actions):
-        """log N(actions; 0, s^2 I) summed over the buffer. actions: (B, horizon) -> (B,)."""
-        return reference_log_prob(actions, self.reference_var)
 
 
 class PriorSampler:
@@ -191,9 +158,8 @@ class PriorSampler:
         return self.horizon // self.action_dim
 
     @torch.no_grad()
-    def rollout(self, start_state, goal_state, actions=None, n_given=0, mode="sample", generator=None):
+    def rollout(self, start_state, goal_state, mode="sample", generator=None):
         """(B, horizon): independent N(0, s^2) actions; mode="mean" gives the prior's mean, 0."""
-        assert actions is None and n_given == 0, "the prior does not condition on given steps"
         shape, device = (start_state.shape[0], self.horizon), start_state.device
         if mode == "mean":
             return torch.zeros(shape, device=device, dtype=start_state.dtype)
@@ -209,7 +175,7 @@ def save_planner(path, model, model_kwargs, train_args=None):
 
 
 def planner_kwargs_from_state_dict(sd):
-    """Recover `GPlaner(...)` constructor kwargs from a bare state_dict (legacy checkpoints).
+    """Recover `GPlanner(...)` constructor kwargs from a bare state_dict (legacy checkpoints).
     Bounds of the log-std squash are not in the state_dict and are assumed to be the defaults,
     and the policy is assumed to be a single Gaussian (n_components=1)."""
     width, in_dim = sd["in_proj.0.weight"].shape            # (3 * hidden, 2 * state_dim + horizon)
@@ -221,7 +187,7 @@ def planner_kwargs_from_state_dict(sd):
 
 
 def load_planner(path, device="cpu"):
-    """Build a frozen `GPlaner` from a checkpoint (self-describing or bare state_dict).
+    """Build a frozen `GPlanner` from a checkpoint (self-describing or bare state_dict).
 
     Returns (model, train_args or None).
     """
@@ -230,8 +196,8 @@ def load_planner(path, device="cpu"):
         kwargs, sd, train_args = ckpt["model_kwargs"], ckpt["state_dict"], ckpt.get("train_args")
     else:
         kwargs, sd, train_args = planner_kwargs_from_state_dict(ckpt), ckpt, None
-    model = GPlaner(**kwargs).to(device)
+    model = GPlanner(**kwargs).to(device)
     model.load_state_dict(sd)
     model.eval().requires_grad_(False)
-    print(f"Loaded planner {path}: GPlaner({', '.join(f'{k}={v}' for k, v in kwargs.items())})")
+    print(f"Loaded planner {path}: GPlanner({', '.join(f'{k}={v}' for k, v in kwargs.items())})")
     return model, train_args

@@ -1,4 +1,4 @@
-"""Evaluate a trained GPlaner (GFlowNet) against CEM as MPC planners on TwoRoom, PushT, Reacher or Cube.
+"""Evaluate a trained GPlanner (GFlowNet) against CEM as MPC planners on TwoRoom, PushT, Reacher or Cube.
 
     # head-to-head, one wandb run with a comparison table (CEM always uses its paper settings
     # unless --cem-* says otherwise)
@@ -40,15 +40,16 @@ import stable_worldmodel as swm
 import torch
 import wandb
 
-from gplan.data import STABLEWM_HOME
 from gplan.torch.evaluation import (
     build_policy,
+    check_no_leakage,
+    check_planner_matches,
     eval_episode_pool,
     evaluate,
     fit_normalizers,
+    refine_settings,
     sample_eval_starts,
     TASKS,
-    trained_on,
     use_deterministic_algorithms,
 )
 from gplan.torch.lewm import check_history, embed_dim
@@ -87,7 +88,7 @@ def parse_args(argv=None):
     p.add_argument("--horizon", type=int, default=5)
     p.add_argument("--action-block", type=int, default=5, help="frameskip")
     p.add_argument("--gflow-samples", type=int, default=64,
-                   help="[gflow, gflow-refine] plans sampled from the GPlaner per replanning step")
+                   help="[gflow, gflow-refine] plans sampled from the GPlanner per replanning step")
     p.add_argument("--cem-samples", type=int, default=300, help="[cem] samples per iteration (LeWM paper: 300)")
     p.add_argument("--cem-steps", type=int, default=30, help="[cem] optimization iterations")
     p.add_argument("--cem-topk", type=int, default=30, help="[cem] elites kept per iteration")
@@ -115,47 +116,6 @@ def parse_args(argv=None):
     args.dataset = args.dataset or task.dataset
     args.env = args.env or task.env
     return args, task
-
-
-def check_planner_matches(planner, train_args, args, env_action_dim):
-    """Stop on train / eval protocol mismatches (dataset, LeWM checkpoint, goal offset, plan steps,
-    frameskip; warnings instead with --allow-mismatch) and assert the plan layout fits the env."""
-    if train_args is not None:
-        wandb.config.update({"planner_train_args": train_args})
-        mismatches = [f"planner was trained with {k}={train_args[k]} but eval uses {eval_v}"
-                      for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon),
-                                        ("dataset", args.dataset), ("frameskip", args.action_block))
-                      if k in train_args and train_args[k] != eval_v]
-        eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
-        if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
-            mismatches.append(f"planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
-        if mismatches and not args.allow_mismatch:
-            raise SystemExit("ERROR: " + "; ".join(mismatches) + " (--allow-mismatch to evaluate anyway)")
-        for msg in mismatches:
-            print(f"WARNING: {msg}")
-    if (train_args or {}).get("method") == "map" and args.gflow_select != "mean":
-        print("WARNING: a --method map planner is trained for one plan per condition (its stds are untrained); "
-              "evaluate it with --gflow-select mean")
-    action_dim = env_action_dim * args.action_block
-    assert planner.horizon == args.horizon * action_dim, (
-        f"planner horizon {planner.horizon} != --horizon {args.horizon} x action dim {action_dim}")
-
-
-def check_no_leakage(dataset, episodes, train_args, args):
-    """Evaluating on episodes the planner trained on is an error with a held-out split and a warning
-    under the LeWM protocol (--holdout-frac 0), where it is unavoidable for a planner trained on all."""
-    if (train_args or {}).get("dataset", args.dataset) != args.dataset:
-        return  # different datasets: episode ids do not correspond (check_planner_matches warned)
-    seen = trained_on(dataset, episodes, train_args)
-    if not seen:
-        return
-    msg = (f"{len(set(seen))} of the {len(set(episodes))} evaluation episodes were in the planner's training data "
-           f"(planner: holdout_frac={(train_args or {}).get('holdout_frac', 0.0)}, "
-           f"split_seed={(train_args or {}).get('split_seed', 0)}; eval: --holdout-frac {args.holdout_frac} "
-           f"--split-seed {args.split_seed})")
-    if args.holdout_frac > 0:
-        raise SystemExit(f"ERROR: {msg}. Evaluate with the planner's split, or train with this one.")
-    print(f"WARNING: {msg}")
 
 
 def write_results(path, args, rows, successes, episodes, start_steps, planner_train_args):
@@ -192,17 +152,6 @@ def print_comparison(rows, successes, policies, num_eval):
     wandb.log({"comparison": table})
 
 
-def refine_settings(args, train_args, d):
-    """Settings shared by gflow-refine and prior-refine; beta and s^2 default to the planner's training
-    values (s^2 = --prior-var without a planner). d: LeWM embedding dim (beta is per dim)."""
-    train_args = train_args or {}
-    beta = args.refine_beta if args.refine_beta is not None else train_args.get("beta")
-    if args.refine_objective == "target" and beta is None:
-        raise ValueError("--refine-beta is needed: no planner, or its checkpoint does not record its training beta")
-    return dict(steps=args.refine_steps, lr=args.refine_lr, objective=args.refine_objective,
-                beta=(beta or 0.0) / d, reference_var=train_args.get("ref_var", args.prior_var))
-
-
 def main():
     args, task = parse_args()
     if args.deterministic:
@@ -224,6 +173,8 @@ def main():
         wm.eval().requires_grad_(False)
     if any(name.startswith("gflow") for name in args.policy):
         planner, train_args = load_planner(args.planner, args.device)
+        if train_args is not None:
+            wandb.config.update({"planner_train_args": train_args})
         check_planner_matches(planner, train_args, args, dataset.get_col_data("action").shape[1])
         check_no_leakage(dataset, episodes, train_args, args)
     if any(name.endswith("-refine") for name in args.policy):  # one setting for gflow- and prior-refine

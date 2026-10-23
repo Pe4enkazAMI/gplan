@@ -1,4 +1,4 @@
-"""Baselines trained with the same GPlaner, data and optimizer as the GFlowNet, but other objectives.
+"""Baselines trained with the same GPlanner, data and optimizer as the GFlowNet, but other objectives.
 
     bc   behavior cloning: maximize log P_F of the dataset's expert plan between start and goal
          (needs action labels, which the GFlowNet does not use)
@@ -11,16 +11,14 @@ Both are trained by `train_baseline`, which mirrors `gplan.jax.train.train` (sam
 logging). Both objectives are deterministic given the batches, so no random key is involved.
 """
 
-import time
 from functools import partial
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import wandb
 
 from gplan.jax.policy import rollout, step_log_probs
-from gplan.jax.train import make_optimizer, norm_stats
+from gplan.jax.train import host_stats, make_optimizer, norm_stats, StepLog
 
 
 def bc_loss(model, z_start, z_goal, plans):
@@ -61,18 +59,15 @@ def train_baseline(model, loss_fn, batches, lr=1e-3, grad_clip=0.0, log_every=10
         updates, opt_state = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_array))
         return eqx.apply_updates(model, updates), opt_state, loss, stats
 
-    losses, t_prev = [], time.perf_counter()
+    log = StepLog(log_every, lambda step, s: (
+        f"step {step:5d}  loss {s['loss/total']:.4f}  "
+        f"grad_norm {s['grad_norm/global_raw']:.3e} -> {s['grad_norm/global']:.3e}"))
+    losses = []
     for step, batch in enumerate(batches):
         model, opt_state, loss, stats = step_fn(model, opt_state, *batch)
-        stats = {k: float(v) for k, v in jax.device_get(stats).items()}
+        stats = host_stats(stats)
         losses.append(float(loss))
-        t_now = time.perf_counter()
-        stats.update({"loss/total": losses[-1], "optim/lr": lr, "time/step_s": t_now - t_prev})
-        t_prev = t_now
-        if wandb.run is not None:
-            wandb.log(stats, step=step)
-        if step % log_every == 0:
-            print(f"step {step:5d}  loss {losses[-1]:.4f}  "
-                  f"grad_norm {stats['grad_norm/global_raw']:.3e} -> {stats['grad_norm/global']:.3e}")
+        stats.update({"loss/total": losses[-1], "optim/lr": lr, "time/step_s": log.step_time()})
+        log(step, stats)
     return model, losses
 

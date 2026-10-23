@@ -5,7 +5,7 @@ import time
 import numpy as np
 import torch
 
-from gplan.torch.lewm import encode, lewm_cost, lewm_cost_grad
+from gplan.torch.lewm import encode, lewm_cost
 
 
 def refine_plans(wm, z_start, z_goal, plans, steps, lr, beta, reference_var, objective="target"):
@@ -19,7 +19,7 @@ def refine_plans(wm, z_start, z_goal, plans, steps, lr, beta, reference_var, obj
     plans = plans.detach().clone().requires_grad_(True)
     opt = torch.optim.Adam([plans], lr=lr)
     for _ in range(steps):
-        loss = lewm_cost_grad(wm, z_start, z_goal, plans)
+        loss = lewm_cost(wm, z_start, z_goal, plans)
         if objective == "target":
             loss = beta * loss + plans.pow(2).sum(dim=(1, 2)) / (2 * reference_var)
         opt.zero_grad()

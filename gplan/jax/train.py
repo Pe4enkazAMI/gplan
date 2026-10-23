@@ -45,7 +45,7 @@ INIT_STREAM, TRAIN_STREAM, CRITIC_STREAM, MALA_STREAM = 0, 1, 2, 3
 
 
 def init_key(seed):
-    """Key for the model's initial weights (`GPlaner(..., key=init_key(seed))`)."""
+    """Key for the model's initial weights (`GPlanner(..., key=init_key(seed))`)."""
     return jax.random.fold_in(jax.random.key(seed), INIT_STREAM)
 
 
@@ -63,7 +63,7 @@ def make_optimizer(model, lr, lr_z=None, grad_clip=0.0):
     labels = jax.tree.map(lambda _: "policy", params)
     labels = eqx.tree_at(lambda m: m.Z, labels, replace=jax.tree.map(lambda _: "z", params.Z))
     clip = optax.clip_by_global_norm(grad_clip) if grad_clip > 0 else optax.identity()
-    # labels is itself a GPlaner (callable), so hand it to optax through a function
+    # labels is itself a GPlanner (callable), so hand it to optax through a function
     adam = optax.multi_transform({"policy": optax.adam(lr), "z": optax.adam(lr if lr_z is None else lr_z)},
                                  lambda _: labels)
     return optax.chain(clip, adam)
@@ -86,6 +86,32 @@ def norm_stats(model, grads, grad_clip):
     else:
         stats["grad_norm/global"] = raw
     return stats
+
+
+def host_stats(stats):
+    """A jitted step's stats as Python floats (one host transfer per step)."""
+    return {k: float(v) for k, v in jax.device_get(stats).items()}
+
+
+class StepLog:
+    """What every training loop (here, gplan.jax.baselines, gplan.jax.ppo) does after a step: time it
+    (step 0 includes compilation), log its stats to wandb when a run is active and print
+    `line(step, stats)` every `log_every` steps."""
+
+    def __init__(self, log_every, line):
+        self.log_every, self.line, self.t_prev = log_every, line, time.perf_counter()
+
+    def step_time(self):
+        """Seconds since the previous call (the first: since construction)."""
+        t_now = time.perf_counter()
+        dt, self.t_prev = t_now - self.t_prev, t_now
+        return dt
+
+    def __call__(self, step, stats):
+        if wandb.run is not None:
+            wandb.log(stats, step=step)
+        if step % self.log_every == 0:
+            print(self.line(step, stats))
 
 
 def make_train_step(optimizer, cfg: TrainConfig):
@@ -147,8 +173,11 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
     ls_key = jax.random.fold_in(jax.random.key(seed), MALA_STREAM)
     ls_step_size = cfg.ls_step_size
 
+    log = StepLog(log_every, lambda step, s: (
+        f"step {step:5d}  loss {s['loss/total']:.4f}  residual_std {s['tb/residual_std']:.3f}  "
+        f"beta {s['tb/beta']:.3f}  cost {s['cost/mean']:.3f}  log_z {s['tb/log_z']:+.3f}  "
+        f"beta_cost {s['cost/beta_cost']:.3f} grad_norm {s['grad_norm/global_raw']:.3e} -> {s['grad_norm/global']:.3e}"))
     losses = []
-    t_prev = time.perf_counter()
     for step, (z_start, z_goal) in enumerate(batches):
         key, step_key = jax.random.split(key)
         ls_key, step_ls_key = jax.random.split(ls_key)
@@ -157,22 +186,15 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
         model, opt_state, loss, stats = train_step(model, opt_state, cost_model, step_key, step_ls_key, z_start,
                                                    z_goal, jnp.float32(beta_t), jnp.float32(ls_step_size),
                                                    local_search)
-        stats = {k: float(v) for k, v in jax.device_get(stats).items()}  # one host transfer per step
+        stats = host_stats(stats)
         losses.append(float(loss))
         if local_search:
             stats["ls/step_size"] = ls_step_size
             ls_step_size = adapt_step_size(ls_step_size, stats["ls/accept"], cfg.ls_target_accept)
 
-        t_now = time.perf_counter()
+        dt = log.step_time()
         stats.update({"loss/total": losses[-1], "tb/beta": beta_t, "optim/lr": lr,
-                      "optim/lr_z": lr if lr_z is None else lr_z, "time/step_s": t_now - t_prev,
-                      "time/samples_per_s": len(z_start) * cfg.n_samples / (t_now - t_prev)})
-        t_prev = t_now
-        if wandb.run is not None:
-            wandb.log(stats, step=step)
-        if step % log_every == 0:
-            print(f"step {step:5d}  loss {losses[-1]:.4f}  residual_std {stats['tb/residual_std']:.3f}  "
-                  f"beta {beta_t:.3f}  cost {stats['cost/mean']:.3f}  log_z {stats['tb/log_z']:+.3f}  "
-                  f"beta_cost {stats['cost/beta_cost']:.3f} "
-                  f"grad_norm {stats['grad_norm/global_raw']:.3e} -> {stats['grad_norm/global']:.3e}")
+                      "optim/lr_z": lr if lr_z is None else lr_z, "time/step_s": dt,
+                      "time/samples_per_s": len(z_start) * cfg.n_samples / dt})
+        log(step, stats)
     return model, losses
