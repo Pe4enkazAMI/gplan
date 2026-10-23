@@ -1,0 +1,13 @@
+# scripts/train.py. Every setting, its type and default: gplan/config.py TrainArgs. This file picks the task
+# (configs/task: dataset, LeWM checkpoint) and, optionally, a model (configs/model: a training method and
+# its settings for that task); any setting can then be overridden, e.g.
+#   python scripts/train.py task=pusht model=gfn-mala seed=1 out=outputs/pusht/gfn-mala-s1
+#   python scripts/train.py beta=120 wandb_name=tb-beta120 out=outputs/tb-beta120
+defaults:
+  - train_args
+  - task: tworoom
+  - model: null       # none: the plain defaults of TrainArgs (method gfn, beta 1, 1000 batches, ...)
+  - _self_
+
+dataset: ${task.dataset}
+ckpt: ${stablewm_home:}/${task.wm}_object.ckpt

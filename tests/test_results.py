@@ -135,3 +135,24 @@ def test_rows_are_ordered_reference_first_then_by_label_and_compute(tmp_path):
     rows = comparison_table(group_runs(load_runs([a, b])))
     assert [(r["policy"], r["plans_per_replan"]) for r in rows] == [("cem", 9000), ("gflow", 1), ("gflow", 64),
                                                                      ("random", 0)]
+
+
+def test_run_tables_stage(tmp_path):
+    """scripts/run.py stage=tables: each table of configs/eval from its files, as aggregate_results.py
+    writes it (<results>/tables/<table>.md and .csv); a table without results files is skipped."""
+    (tmp_path / "heldout").mkdir()
+    write_run(tmp_path / "heldout" / "gfn-s0-e42.json", 42, "outputs/tworoom/gfn-s0.pt",
+              {"gflow": ([True, True, False, False], 64)}, label="gfn")
+    write_run(tmp_path / "heldout" / "baselines-e42.json", 42, None, {"cem": ([True, False, False, False], 9000)})
+    out = subprocess.run([sys.executable, str(REPO / "scripts" / "run.py"), "stage=tables", f"results={tmp_path}"],
+                         capture_output=True, text=True, cwd=tmp_path, env={"PYTHONPATH": str(REPO), "PATH": ""},
+                         timeout=300)
+    assert out.returncode == 0, out.stderr
+    direct = subprocess.run([sys.executable, str(REPO / "scripts" / "aggregate_results.py"),
+                             str(tmp_path / "heldout" / "baselines-e42.json"), str(tmp_path / "heldout" / "gfn-s0-e42.json"),
+                             "--csv", str(tmp_path / "direct.csv")], capture_output=True, text=True, cwd=REPO,
+                            env={"PYTHONPATH": str(REPO), "PATH": ""}, timeout=120)
+    assert (tmp_path / "tables" / "heldout.md").read_text() == direct.stdout
+    assert (tmp_path / "tables" / "heldout.csv").read_text() == (tmp_path / "direct.csv").read_text()
+    assert "(no results for alldata yet)" in out.stdout and not (tmp_path / "tables" / "alldata.md").exists()
+    assert (tmp_path / "tables" / "compute_curve.md").exists()  # heldout/baselines-* and gfn-* are in it

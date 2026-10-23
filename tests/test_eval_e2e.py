@@ -62,9 +62,9 @@ def evaluate(home, tmp_path, *args, task="tworoom", dataset="toy_tworoom", wm="t
     """Run scripts/evaluate.py in a fresh process (as on the cluster); returns the policies of the
     --results-json (the whole file with full=True, the console output with expect_failure=True)."""
     out = tmp_path / f"results_{len(list(tmp_path.glob('results_*')))}.json"
-    cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), "--task", task, "--wm", wm,
-           "--dataset", dataset, "--num-eval", "4", "--img-size", "8", "--device", "cpu",
-           "--wandb-mode", "disabled", "--results-json", str(out), *args]
+    cmd = [sys.executable, str(REPO / "scripts" / "evaluate.py"), f"task={task}", f"wm={wm}",
+           f"dataset={dataset}", "num_eval=4", "img_size=8", "device=cpu",
+           "wandb_mode=disabled", f"results_json={out}", *args]
     proc = subprocess.run(cmd, env=script_env(home), capture_output=True, text=True, timeout=600)
     if expect_failure:
         assert proc.returncode != 0
@@ -86,20 +86,19 @@ def outcome(metrics):
 
 def test_cem_does_not_depend_on_gflow(home, tmp_path):
     """Same CEM result with either checkpoint, in either order, alone, and whatever --gflow-samples is."""
-    a = evaluate(home, tmp_path, "--policy", "gflow", "cem", "--planner", str(home / "gauss.pt"))
-    b = evaluate(home, tmp_path, "--policy", "cem", "gflow", "--planner", str(home / "mixture.pt"),
-                 "--gflow-samples", "128")
-    c = evaluate(home, tmp_path, "--policy", "cem")
+    a = evaluate(home, tmp_path, "policy=[gflow,cem]", f"planner={home / 'gauss.pt'}")
+    b = evaluate(home, tmp_path, "policy=[cem,gflow]", f"planner={home / 'mixture.pt'}", "gflow_samples=128")
+    c = evaluate(home, tmp_path, "policy=[cem]")
     assert outcome(a["cem"]) == outcome(b["cem"]) == outcome(c["cem"])
     assert a["cem"]["plans_per_replan"] == 300 * 30  # the LeWM paper's CEM, untouched by GFlow flags
     assert b["gflow"]["plans_per_replan"] == 128
 
 
 def test_every_policy_is_reproducible(home, tmp_path):
-    args = ("--policy", "gflow", "gflow-refine", "cem", "prior", "prior-refine", "random",
-            "--planner", str(home / "mixture.pt"), "--refine-steps", "3", "--prior-samples", "32")
+    args = ("policy=[gflow,gflow-refine,cem,prior,prior-refine,random]", f"planner={home / 'mixture.pt'}",
+            "refine_steps=3", "prior_samples=32")
     # the second run also checks that --deterministic changes nothing on CPU
-    first, second = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args, "--deterministic")
+    first, second = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args, "deterministic=true")
     assert list(first) == ["gflow", "gflow-refine", "cem", "prior", "prior-refine", "random"]
     for name in first:
         assert outcome(first[name]) == outcome(second[name]), name
@@ -124,7 +123,7 @@ def test_every_policy_is_reproducible(home, tmp_path):
 
 def test_pusht_resets_from_the_full_state(home, tmp_path):
     """PushT starts and goals come from the `state` / `goal_state` columns (agent, block pose)."""
-    res = evaluate(home, tmp_path, "--policy", "cem", "random", "--cem-steps", "2", task="pusht", dataset="toy_pusht")
+    res = evaluate(home, tmp_path, "policy=[cem,random]", "cem_steps=2", task="pusht", dataset="toy_pusht")
     assert set(res) == {"cem", "random"}
     assert len(res["cem"]["episode_successes"]) == 4
 
@@ -132,18 +131,18 @@ def test_pusht_resets_from_the_full_state(home, tmp_path):
 def test_held_out_evaluation_uses_only_unseen_episodes(home, tmp_path):
     """With --holdout-frac, episodes come from the held-out side of the split; a planner whose
     recorded split does not hold them out is refused instead of being evaluated on its training data."""
-    res = evaluate(home, tmp_path, "--policy", "gflow", "cem", "--planner", str(home / "gauss_split.pt"),
-                   "--holdout-frac", "0.5", "--split-seed", "0", full=True)
+    res = evaluate(home, tmp_path, "policy=[gflow,cem]", f"planner={home / 'gauss_split.pt'}",
+                   "holdout_frac=0.5", "split_seed=0", full=True)
     dataset = swm.data.HDF5Dataset("toy_tworoom", cache_dir=home)
     _, held_out = split_episodes(dataset.get_col_data(episode_column(dataset.column_names)), 0.5, 0)
     assert {ep for ep, _ in res["episodes"]} <= set(held_out.tolist())
     assert res["planner_train_args"]["holdout_frac"] == 0.5 and set(res["policies"]) == {"gflow", "cem"}
 
-    out = evaluate(home, tmp_path, "--policy", "gflow", "--planner", str(home / "gauss.pt"),
-                   "--holdout-frac", "0.5", expect_failure=True)
+    out = evaluate(home, tmp_path, "policy=[gflow]", f"planner={home / 'gauss.pt'}",
+                   "holdout_frac=0.5", expect_failure=True)
     assert "were in the planner's training data" in out
-    out = evaluate(home, tmp_path, "--policy", "gflow", "--planner", str(home / "gauss_split.pt"),
-                   "--holdout-frac", "0.5", "--split-seed", "1", expect_failure=True)  # a different split
+    out = evaluate(home, tmp_path, "policy=[gflow]", f"planner={home / 'gauss_split.pt'}",
+                   "holdout_frac=0.5", "split_seed=1", expect_failure=True)  # a different split
     assert "were in the planner's training data" in out
 
 
@@ -220,11 +219,11 @@ def test_cube_resets_to_the_dataset_state_and_goal(mujoco_home, tmp_path):
 
 @pytest.mark.parametrize("name", sorted(MUJOCO))
 def test_evaluate_runs_on_mujoco_tasks(mujoco_home, tmp_path, name):
-    """scripts/evaluate.py --task reacher / cube end to end: GFlow (an untrained planner of the right
+    """scripts/evaluate.py task=reacher / cube end to end: GFlow (an untrained planner of the right
     plan size), CEM and random, with every reset call applied (no swm "skipping callable" fallback)."""
     dataset, env_dim = MUJOCO[name]
-    res = evaluate(mujoco_home, tmp_path, "--policy", "gflow", "cem", "random", "--planner", str(mujoco_home / f"{name}.pt"),
-                   "--cem-samples", "16", "--cem-steps", "2", "--cem-topk", "4", "--num-eval", "2",  # 2 envs: faster
+    res = evaluate(mujoco_home, tmp_path, "policy=[gflow,cem,random]", f"planner={mujoco_home / f'{name}.pt'}",
+                   "cem_samples=16", "cem_steps=2", "cem_topk=4", "num_eval=2",  # 2 envs: faster
                    task=name, dataset=dataset, wm=f"toy_{name}/lewm", full=True)
     assert set(res["policies"]) == {"gflow", "cem", "random"} and len(res["episodes"]) == 2
     for policy in ("gflow", "cem"):

@@ -1,0 +1,28 @@
+# Success vs compute, held out: GFlow N = 1 ... 256, refinement N x steps, CEM samples x iterations (GFlow
+# N = 64, refinement 64 x 20 and CEM 300 x 30 come from heldout/) -> <results>/curve/
+dir: curve
+episodes: ["holdout_frac=${holdout_frac}", "split_seed=${split_seed}"]
+table: {name: compute_curve, files: ["heldout/baselines-*.json", "heldout/gfn-*.json", "curve/*.json"]}
+runs:
+  - {name: "{model}-n1-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow], args: [gflow_samples=1]}
+  - {name: "{model}-n4-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow], args: [gflow_samples=4]}
+  - {name: "{model}-n16-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow], args: [gflow_samples=16]}
+  - {name: "{model}-n256-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow], args: [gflow_samples=256]}
+  - {name: "{model}-refine-n16-k20-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow-refine],
+     refine: target, args: [gflow_samples=16, refine_steps=20]}
+  - {name: "{model}-refine-n64-k5-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow-refine],
+     refine: target, args: [gflow_samples=64, refine_steps=5]}
+  - {name: "{model}-refine-n64-k50-s{seed}-e{eval_seed}", models: [gfn, gfn-mala], policy: [gflow-refine],
+     refine: target, args: [gflow_samples=64, refine_steps=50]}
+  - {name: "prior-refine-n16-k20-e{eval_seed}", policy: [prior-refine], refine: target,
+     args: [prior_samples=16, refine_steps=20]}
+  - {name: "prior-refine-n64-k5-e{eval_seed}", policy: [prior-refine], refine: target,
+     args: [prior_samples=64, refine_steps=5]}
+  - {name: "prior-refine-n64-k50-e{eval_seed}", policy: [prior-refine], refine: target,
+     args: [prior_samples=64, refine_steps=50]}
+  # CEM: samples x iterations, 10% of the samples as elites
+  - {name: "cem-n30-i3-e{eval_seed}", policy: [cem], args: [cem_samples=30, cem_steps=3, cem_topk=3]}
+  - {name: "cem-n30-i10-e{eval_seed}", policy: [cem], args: [cem_samples=30, cem_steps=10, cem_topk=3]}
+  - {name: "cem-n100-i10-e{eval_seed}", policy: [cem], args: [cem_samples=100, cem_steps=10, cem_topk=10]}
+  - {name: "cem-n100-i30-e{eval_seed}", policy: [cem], args: [cem_samples=100, cem_steps=30, cem_topk=10]}
+  - {name: "cem-n300-i10-e{eval_seed}", policy: [cem], args: [cem_samples=300, cem_steps=10, cem_topk=30]}

@@ -15,19 +15,24 @@ against LeWM's CEM planner on the LeWM evaluation protocol.
 Training runs in **JAX** (Equinox + Optax) on precomputed LeWM embeddings; precompute and
 evaluation run in **PyTorch** (the original LeWM and `stable_worldmodel`).
 
+More: [docs/experiments.md](docs/experiments.md) (the paper's runs, models, tables, configuration),
+[docs/evaluation.md](docs/evaluation.md) (the evaluation protocol, policies and metrics).
+
 ## Layout
 
 ```
 gplan/
+  config.py          settings of train.py / evaluate.py (types, defaults), composed with Hydra from configs/
   data.py            NumPy helpers shared by both sides (STABLEWM_HOME, valid start rows, episode split)
   results.py         pool evaluate.py result files: Wilson intervals, paired McNemar tests
-  torch/             PyTorch: everything that needs the original LeWM
+  torch/             PyTorch: everything that needs the original LeWM (precompute, evaluation)
     lewm.py            load, encode frames, planning cost J (reference implementation)
     precompute.py      encode every dataset frame into latents for training
     distributions.py   DiagGaussianMixture sampling (the policy's step distribution at evaluation)
     policy.py          GPlanner + Sampler used at evaluation, PriorSampler (baselines), checkpoint I/O
     solvers.py         GFlowNet best-of-N solver (+ test-time refinement), cost logging
-    evaluation.py      the LeWM protocol: TwoRoom / PushT / Reacher / Cube presets, normalizers, start sampling
+    evaluation.py      the LeWM protocol: TwoRoom / PushT / Reacher / Cube presets, normalizers, start sampling,
+                       the checks a planner's training protocol must pass
   jax/               JAX: training
     lewm.py            the LeWM predictor in Equinox and J (checked against PyTorch)
     distributions.py   DiagGaussianMixture, normal / reference log-probs
@@ -37,17 +42,18 @@ gplan/
     baselines.py       behavior cloning and amortized MAP planning with the same network
     ppo.py             PPO baseline: the same network as an RL policy, PPO-clip + GAE + a learned critic
     latents.py         (start, goal) pairs from the precomputed latents, expert plans between them
-    train.py           optimizer, jitted train step, training loop, random streams
+    train.py           optimizer, jitted train step, training loop, step logging, random streams
     probe.py           headroom probe: gradient refinement of sampled plans through LeWM
     convert.py         weights PyTorch <-> Equinox (LeWM predictor, GPlanner)
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
-scripts/             convert_lewm, download_data, encode_dataset, train, export_planner, evaluate,
-                     aggregate_results, probe_headroom
-experiments/         train.sh, eval.sh, tables.sh: the paper's runs and tables for one task (config.sh)
+configs/             Hydra configs: train.yaml, evaluate.yaml, run.yaml; task/ (per task), model/ (per
+                     training method), eval/ (the paper's evaluations)
+scripts/             train, evaluate, run (the paper's runs for one task); utilities: convert_lewm,
+                     download_data, encode_dataset, aggregate_results, export_planner, probe_headroom
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
-                     test_jax_optimum / test_jax_baselines / test_jax_ppo (closed-form optima), test_results,
-                     test_eval_e2e (evaluate.py on tiny datasets recorded with the real envs, all four
-                     tasks), test_scripts (every CLI), test_download_data
+                     test_jax_optimum / test_jax_baselines / test_jax_ppo (closed-form optima), test_config,
+                     test_results, test_eval_e2e (evaluate.py on tiny datasets recorded with the real envs, all
+                     four tasks), test_scripts (every CLI), test_download_data
 le-wm/               LeWM sources (git submodule)
 ```
 
@@ -86,7 +92,27 @@ python -c "import jax; print(jax.devices())"   # should list a CUDA device
 Run precompute and evaluation (PyTorch) and training (JAX) as separate processes. Each JAX
 process reserves its fraction of the shared memory when it starts, so two JAX processes at 0.5
 take all of it (the OS included) and can freeze the machine; to run several at once, use
-`XLA_PYTHON_CLIENT_PREALLOCATE=false` (allocate on demand) or smaller fractions.
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` (allocate on demand) or smaller fractions. `scripts/run.py`
+sets it for the processes it starts.
+
+## Settings
+
+`train.py`, `evaluate.py` and `run.py` take [Hydra](https://hydra.cc) overrides, `name=value`. Every
+setting, its type and default is in `gplan/config.py` (`TrainArgs`, `EvalArgs`); `configs/` composes
+them: `task=<name>` picks `configs/task/<name>.yaml` (dataset, LeWM checkpoint and the paper's
+settings for the task) and, for training, `model=<name>` a training method with those settings
+(`configs/model`). Lists are written `"policy=[gflow,cem]"` (quoted for the shell). `--help` prints a
+script's settings as composed with the given overrides:
+
+```bash
+python scripts/train.py task=pusht model=gfn-mala --help
+```
+
+A setting that does not exist, or a value of the wrong type, is an error. Hydra is used for
+composition only: no output folders, no change of the working directory or of logging. Training
+writes its composed config next to the checkpoint (`<out>.yaml`); an evaluation's settings are in
+its results file (`args`). The utilities (`encode_dataset.py`, `download_data.py`, ...) keep plain
+`--flags`.
 
 ## Workflow
 
@@ -98,19 +124,22 @@ python scripts/convert_lewm.py --repo quentinll/lewm-tworooms --name tworoom/lew
 python scripts/encode_dataset.py --dataset tworoom
 
 # 3. Train (JAX). β is per embedding dim: the raw cost is scaled by β / 192.
-#    Writes outputs/tb-beta120.eqx (JAX weights), .json (config) and .pt (PyTorch copy for eval)
-python scripts/train.py --beta 120 --wandb-name tb-beta120 --out outputs/tb-beta120
+#    Writes outputs/tb-beta120.eqx (JAX weights), .json (config), .pt (PyTorch copy for eval), .yaml
+python scripts/train.py beta=120 wandb_name=tb-beta120 out=outputs/tb-beta120
 
 # 4. Evaluate against CEM on the same 50 TwoRoom episodes (PyTorch); episodes are drawn
 #    exactly as le-wm/eval.py draws them, so CEM numbers are comparable to the LeWM paper
-python scripts/evaluate.py --policy gflow cem --planner outputs/tb-beta120.pt
+python scripts/evaluate.py "policy=[gflow,cem]" planner=outputs/tb-beta120.pt
 
-# PushT: the same steps with its own checkpoint and dataset
+# PushT: the same steps with its own checkpoint and dataset; task=pusht picks both, and model=gfn the
+# paper's GFlowNet settings for PushT (configs/task/pusht.yaml, configs/model/gfn.yaml)
 python scripts/convert_lewm.py --repo quentinll/lewm-pusht --name pusht/lewm
 python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt
-python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 192 \
-    --beta-warmup 10000 --n-batches 40000 --out outputs/pusht
-python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
+python scripts/train.py task=pusht model=gfn out=outputs/pusht
+python scripts/evaluate.py task=pusht "policy=[gflow,cem]" planner=outputs/pusht.pt
+
+# The paper's runs for one task: every model x 3 seeds, the ablations, every evaluation, the tables
+python scripts/run.py task=pusht
 ```
 
 ### Reacher and Cube
@@ -128,89 +157,30 @@ to download, about as much again while unpacking; the archive is deleted afterwa
 python scripts/convert_lewm.py --repo quentinll/lewm-reacher --name reacher/lewm
 python scripts/download_data.py --task reacher            # -> $STABLEWM_HOME/dmc/reacher_random.h5
 python scripts/encode_dataset.py --dataset dmc/reacher_random --ckpt $STABLEWM_HOME/reacher/lewm_object.ckpt
-python scripts/evaluate.py --task reacher --policy cem --num-eval 2   # quick check of the env and data
+python scripts/evaluate.py task=reacher "policy=[cem]" num_eval=2   # quick check of the env and data
 
 python scripts/convert_lewm.py --repo quentinll/lewm-cube --name cube/lewm
 python scripts/download_data.py --task cube               # -> $STABLEWM_HOME/ogbench/cube_single_expert.h5
 python scripts/encode_dataset.py --dataset ogbench/cube_single_expert --ckpt $STABLEWM_HOME/cube/lewm_object.ckpt
-python scripts/evaluate.py --task cube --policy cem --num-eval 2
+python scripts/evaluate.py task=cube "policy=[cem]" num_eval=2
 ```
 
-`train.py` reads the plan-step size from the data (`--frameskip` 5 x the dataset's action dim) and
-stops if LeWM's action encoder expects another size. The experiment scripts take `reacher` / `cube`
-like the other tasks (`bash experiments/train.sh cube`); Reacher starts from TwoRoom's GFlowNet
-settings and Cube from PushT's (`experiments/config.sh`).
+`train.py` reads the plan-step size from the data (`frameskip` 5 x the dataset's action dim) and
+stops if LeWM's action encoder expects another size. Reacher starts from TwoRoom's GFlowNet
+settings and Cube from PushT's (`configs/task`).
 
-### Evaluation
-
-Every policy has its own settings, so CEM always runs the LeWM paper configuration
-(`--cem-samples 300 --cem-steps 30 --cem-topk 30`) whatever GFlow checkpoint or flags sit next to it.
-
-| Flag | Meaning |
-| --- | --- |
-| `--policy gflow gflow-refine cem prior prior-refine random` | policies, run in this order on the same episodes |
-| `--gflow-samples N` (64) | plans drawn from the GPlanner per replanning step |
-| `--gflow-select min-cost \| sample \| mean` | execute the cheapest of N, one sample, or the most likely mode |
-| `--refine-steps / --refine-lr / --refine-objective` | `gflow-refine` / `prior-refine`: Adam steps on the actions through LeWM before picking the cheapest |
-| `--prior-samples N` (64) `--prior-var` (1) | `prior`: best-of-N random shooting from N(0, s² I); `prior-refine`: the same plans refined like `gflow-refine` (the control for it) |
-| `--holdout-frac f --split-seed s` | draw episodes only from the episodes `train.py` held out with the same flags; a planner that trained on them is refused (default 0: every episode, the LeWM protocol) |
-| `--label NAME` | name of the planner config in the results file; `aggregate_results.py` pools runs with the same label |
-| `--goal-offset 25 --eval-budget 50 --num-eval 50 --seed 42` | the LeWM protocol |
-| `--results-json PATH` | every policy's metrics and per-episode successes, for sweeps over seeds |
-| `--deterministic` | deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower) |
-
-The table reports success, the LeWM cost of the executed plans (recomputed the same way for every
-solver; per replan in wandb / json), the largest executed |action| in z-scored units (values well
-above ~3 are outside LeWM's training data), and compute per replanning step as world-model passes:
-forward rollouts (`fwd/replan`) and backward passes (`bwd/replan`, refine policies only, each ~2x a
-forward). The pairwise lines count episodes solved by both / only one / neither policy.
-
-### Paper protocol: `experiments/`
-
-Three scripts run everything the paper needs for one task. Training uses the 90% of episodes not held
-out, constant learning rates, 3 seeds per model (ablations: 2); evaluation uses 4 eval seeds x 50
-episodes. Both scripts skip what already exists, so they can be rerun after an interruption. The models,
-MALA settings and ablations of each task are in `experiments/config.sh`.
-
-```bash
-bash experiments/train.sh tworoom    # -> outputs/tworoom/<model>-s<seed>.{eqx,json,pt}; also pusht, reacher, cube
-bash experiments/eval.sh tworoom     # -> results/tworoom/<experiment>/*.json
-bash experiments/tables.sh tworoom   # -> results/tworoom/tables/<experiment>.md / .csv, also printed
-```
-
-| Model | Trained as |
-| --- | --- |
-| `gfn` | the GFlowNet (TB) |
-| `gfn-mala` | the GFlowNet + MALA plans as off-policy data (from the end of the beta warmup) |
-| `bc` | behavior cloning on the expert actions (same network) |
-| `map` | amortized MAP planning through LeWM (same network, one plan per condition) |
-| `ppo` | PPO (clipped surrogate, GAE, learned critic) maximizing the plan return −βJ + log N(A): a reward maximizer |
-| `ppo-maxent` | the same with the entropy term −log π in the reward (`--ent-coef 1`): its optimum is the GFlowNet target |
-| ablations | TwoRoom, Reacher: `gfn` at beta x 0.5 / x 2; PushT, Cube: `gfn-mala` at beta x 0.5 / x 2, one Gaussian instead of 7 (`gfn-k1`, `gfn-mala-k1`); every task: `ppo-cost` / `ppo-cost-maxent`, PPO on −βJ alone (classic / with the entropy term) |
-
-| Table | Content |
-| --- | --- |
-| `heldout` | the main comparison on held-out episodes: CEM (LeWM paper config), prior (best of 64 random plans), prior-refine, and per model `gflow` (best of 64 samples; map: its single plan) and `gflow-refine` (+ 20 gradient steps through LeWM); every refine policy twice, on βJ + ‖A‖²/2 (`obj=target`) and on J alone (`obj=cost`) |
-| `alldata` | the same on every episode (the LeWM paper's protocol, comparable with its CEM numbers) |
-| `compute_curve` | success vs world-model passes: GFlow N = 1 ... 256, refinement N x steps = 16 x 20, 64 x 5 / 20 / 50 (gfn, gfn-mala and prior starts), CEM samples x iterations |
-| `ablations` | the ablations next to `gfn` and `gfn-mala` (`ABLATIONS=0` skips them) |
-
-Every row pools training seeds (same label) and evaluation seeds: success with a Wilson 95% interval
-and the spread across training seeds, plan cost, compute per replan, and a paired comparison with the
-paper's CEM on the same episodes (exact McNemar p).
-
-### Experiments
+### More experiments
 
 ```bash
 # mixture policy (K Gaussians per plan step) + MALA local search as off-policy data:
-# every --ls-every steps from --ls-start on, --ls-steps MALA steps from each on-policy plan toward the
+# every ls_every steps from ls_start on, ls_steps MALA steps from each on-policy plan toward the
 # target (gradients through LeWM, step size adapted to ~57% acceptance). wandb: policy/weight_max (-> 1:
 # components collapsed), ls/accept, ls/cost_gain (-> 0 when the sampler matches its target), ls/move
-python scripts/train.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/lewm_object.ckpt --beta 192 \
-    --n-components 4 --ls-steps 10 --ls-every 4 --ls-start 10000 --out outputs/pusht-mog-mala
+python scripts/train.py task=pusht model=gfn n_components=4 ls_steps=10 ls_every=4 ls_start=10000 \
+    out=outputs/pusht-mog-mala
 
 # test-time refinement next to best-of-N and CEM
-python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
+python scripts/evaluate.py task=pusht "policy=[gflow,gflow-refine,cem]" planner=outputs/pusht.pt
 
 # headroom probe (no env): LeWM cost of best-of-64 samples before / after gradient refinement,
 # next to prior shooting and the dataset's expert actions
@@ -220,26 +190,11 @@ python scripts/probe_headroom.py outputs/pusht
 python scripts/export_planner.py outputs/pusht
 ```
 
-## Reproducibility
-
-- **Seeds.** `train.py --seed` derives independent random streams: the initial weights, the
-  on-policy plans, MALA's proposals and accept decisions, PPO's critic weights (`gplan/jax/train.py`).
-  `evaluate.py --seed` picks the episodes and
-  seeds CEM's and GFlow's own random generators, so a policy's result does not depend on the
-  others evaluated with it.
-- **GPU determinism.** On CPU, reruns are bit-identical. On GPU use `--deterministic` in
-  `train.py` (`--xla_gpu_deterministic_ops`) and `evaluate.py` (deterministic cuDNN / cuBLAS).
-- **Precision.** `train.py --matmul-precision highest` (default) keeps float32 matmuls exact,
-  matching the PyTorch cost to round-off; `default` lets the GPU use TF32 (faster, J changes
-  slightly). PyTorch runs the LeWM encoder's patch convolution in TF32 on recent GPUs by default,
-  both in precompute and in evaluation, so latents and eval-time embeddings are consistent.
-- The first training step includes JIT compilation (~10 s).
-
 ## Tests
 
 ```bash
 pytest                    # everything, ~17 min on CPU (Reacher / Cube tests need the [mujoco] extra, else skipped)
-pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~2.5 min
+pytest -m "not slow"      # skips end-to-end runs and training to convergence, ~3 min
 ruff check .              # pyflakes + import order
 ```
 
@@ -253,8 +208,9 @@ process peaks at about 2.6 GB.
 JAX code is checked against the PyTorch code on identical weights (cost, policy, losses and
 gradients), the JAX densities against `torch.distributions`, the losses against the
 closed-form optimum (exactly 0 there for any plan, `tests/test_jax_optimum.py`), training against
-that optimum from a random init (TB, with and without MALA), and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
-(CEM identical whatever GFlow checkpoint runs next to it, every policy reproducible).
+that optimum from a random init (TB, with and without MALA), and `scripts/evaluate.py` end to end on
+a tiny real `stable_worldmodel` setup (CEM identical whatever GFlow checkpoint runs next to it, every
+policy reproducible).
 
 The losses take the plan costs as data, and `step_log_probs` scores any plan, so new plan
 sources (expert segments, replay, local search) plug into `gplan/jax/train.py` without touching

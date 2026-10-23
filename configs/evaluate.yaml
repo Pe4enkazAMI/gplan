@@ -1,0 +1,7 @@
+# scripts/evaluate.py. Every setting, its type and default: gplan/config.py EvalArgs. `task` (configs/task)
+# picks the evaluation preset gplan.torch.evaluation.TASKS[<task>]: env, dataset, LeWM checkpoint, resets, e.g.
+#   python scripts/evaluate.py task=pusht "policy=[gflow,cem]" planner=outputs/pusht/gfn-s0.pt
+defaults:
+  - eval_args
+  - task: tworoom
+  - _self_

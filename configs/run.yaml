@@ -1,0 +1,34 @@
+# scripts/run.py: the paper's runs for one task (configs/task): train every model (configs/model) and the
+# task's ablations, evaluate them (configs/eval), build the tables. Finished runs are skipped, so it can be
+# rerun after an interruption. E.g.
+#   python scripts/run.py task=pusht
+#   python scripts/run.py task=pusht stage=eval "eval_overrides={device:cuda}"
+#   python scripts/run.py task=pusht "only=[ppo,ppo-maxent,ppo-cost,ppo-cost-maxent]"   # just these models
+defaults:
+  - task: tworoom
+  - eval@evals.heldout: heldout
+  - eval@evals.alldata: alldata
+  - eval@evals.curve: curve
+  - eval@evals.ablations: ablations
+  - _self_
+
+stage: all                 # train, eval, tables or all
+dry_run: false             # print what would run, run nothing
+only: null                 # train and evaluate only these models / ablations (tables: all results)
+out: outputs/${task.name}        # checkpoints <out>/<model>-s<seed>.{eqx,json,pt,yaml}
+results: results/${task.name}    # <results>/<eval dir>/<run>.json, <results>/tables/<table>.{md,csv}
+
+models: [gfn, gfn-mala, bc, map, ppo, ppo-maxent]   # configs/model
+seeds: [0, 1, 2]           # training seeds of every model
+ablations: true            # also the task's ablations (configs/task/<task>.yaml), trained and evaluated
+ablation_seeds: [0, 1]
+holdout_frac: 0.1          # 10% of the episodes are never trained on (held-out evaluation)
+split_seed: 0
+eval_seeds: [42, 43, 44, 45]   # episode sets, num_eval episodes each (the LeWM protocol: 50)
+num_eval: 50
+wandb_mode: online
+train_overrides: null      # settings of every train.py run, e.g. {log_every:100}
+eval_overrides: null       # settings of every evaluate.py run, e.g. {device:cuda} or {deterministic:true}
+refine:                    # the *-refine policies' test-time refinement of the 64 sampled plans
+  target: [refine_steps=20, refine_objective=target, "refine_beta=${task.beta}"]   # beta J + |A|^2/2 (the GFlowNet target)
+  cost: [refine_steps=20, refine_objective=cost]                                  # J alone

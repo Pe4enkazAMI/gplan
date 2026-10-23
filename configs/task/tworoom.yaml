@@ -1,0 +1,15 @@
+# TwoRoom: the paper's settings (env, reset protocol: gplan.torch.evaluation.TASKS["tworoom"])
+name: tworoom
+dataset: tworoom              # $STABLEWM_HOME/<dataset>.h5
+wm: tworoom/lewm              # LeWM checkpoint $STABLEWM_HOME/<wm>_object.ckpt
+beta: 90                      # final cost temperature per embedding dim: gfn, map, ppo, and refinement
+gfn: {beta_warmup: 1000, n_batches: 20000, n_components: 1}   # the GFlowNet (configs/model/gfn.yaml)
+mala: {ls_steps: 10, ls_every: 10, ls_start: 1000}            # what gfn-mala adds, from the end of the warmup
+ppo: {n_batches: 20000, n_components: 1}                      # the GFlowNet's iterations and policy, no warmup
+baseline_batches: 20000                                       # bc and map converge faster
+# ablations, name: train.py overrides. beta x 0.5 / x 2, and PPO on the cost alone (classic, max-ent)
+ablations:
+  gfn-beta45: [model=gfn, beta=45]
+  gfn-beta180: [model=gfn, beta=180]
+  ppo-cost: [model=ppo, ppo_reward=cost]
+  ppo-cost-maxent: [model=ppo, ppo_reward=cost, ent_coef=1]

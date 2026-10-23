@@ -1,0 +1,12 @@
+# Each ablation of the task (configs/task/<task>.yaml ablations): best of 64 and refined, held out
+# -> <results>/ablations/
+dir: ablations
+enabled: ${ablations}
+episodes: ["holdout_frac=${holdout_frac}", "split_seed=${split_seed}"]
+table: {name: ablations, files: ["heldout/baselines-*.json", "heldout/gfn-*.json", "ablations/*.json"]}
+runs:
+  - name: "{model}-s{seed}-e{eval_seed}"
+    models: ${oc.dict.keys:task.ablations}
+    seeds: ${ablation_seeds}
+    policy: [gflow, gflow-refine]
+    refine: target

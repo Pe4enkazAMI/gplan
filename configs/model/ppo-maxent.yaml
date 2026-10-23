@@ -1,0 +1,6 @@
+# @package _global_
+# PPO with the entropy term -log pi in the reward: its optimum is the GFlowNet target
+defaults:
+  - ppo
+  - _self_
+ent_coef: 1

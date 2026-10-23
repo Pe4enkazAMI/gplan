@@ -1,0 +1,18 @@
+# PushT: the paper's settings (env, reset protocol: gplan.torch.evaluation.TASKS["pusht"])
+name: pusht
+dataset: pusht_expert_train   # $STABLEWM_HOME/<dataset>.h5
+wm: pusht/lewm                # LeWM checkpoint $STABLEWM_HOME/<wm>_object.ckpt
+beta: 192                     # final cost temperature per embedding dim: gfn, map, ppo, and refinement
+gfn: {beta_warmup: 30000, n_batches: 60000, n_components: 7}  # the GFlowNet (configs/model/gfn.yaml)
+mala: {ls_steps: 10, ls_every: 10, ls_start: 30000}           # what gfn-mala adds, from the end of the warmup
+ppo: {n_batches: 60000, n_components: 7}                      # the GFlowNet's iterations and policy, no warmup
+baseline_batches: 20000                                       # bc and map converge faster
+# ablations, name: train.py overrides. gfn-mala's beta x 0.5 / x 2, one Gaussian instead of 7, and PPO on
+# the cost alone (classic, max-ent)
+ablations:
+  gfn-mala-beta96: [model=gfn-mala, beta=96]
+  gfn-mala-beta384: [model=gfn-mala, beta=384]
+  gfn-k1: [model=gfn, n_components=1]
+  gfn-mala-k1: [model=gfn-mala, n_components=1]
+  ppo-cost: [model=ppo, ppo_reward=cost]
+  ppo-cost-maxent: [model=ppo, ppo_reward=cost, ent_coef=1]

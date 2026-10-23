@@ -1,0 +1,7 @@
+# @package _global_
+# PPO maximizing the plan return -beta J + log N(A) (classic PPO, a reward maximizer): the GFlowNet's
+# final beta, iterations and policy family (configs/task/<task>.yaml ppo), no warmup
+method: ppo
+beta: ${task.beta}
+n_batches: ${task.ppo.n_batches}
+n_components: ${task.ppo.n_components}

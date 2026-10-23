@@ -5,7 +5,7 @@
     map  amortized MAP planning: the policy's deterministic plan A(c) (most likely component at every
          step) minimizes beta * J(A) + ||A||^2 / (2 s^2), the -log of the GFlowNet target, by
          backpropagating through LeWM. One plan per condition, no distribution: evaluate it with
-         `scripts/evaluate.py --gflow-select mean`.
+         `scripts/evaluate.py gflow_select=mean`.
 
 Both are trained by `train_baseline`, which mirrors `gplan.jax.train.train` (same optimizer and
 logging). Both objectives are deterministic given the batches, so no random key is involved.

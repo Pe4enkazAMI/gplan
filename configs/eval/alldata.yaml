@@ -1,0 +1,7 @@
+# The same on every episode: the LeWM paper's protocol (most were trained on) -> <results>/alldata/
+defaults:
+  - compare
+  - _self_
+dir: alldata
+episodes: [holdout_frac=0]
+table: {name: alldata, files: ["alldata/*.json"]}

@@ -1,9 +1,9 @@
-"""Pool `scripts/evaluate.py --results-json` files into one comparison table (see gplan/results.py).
+"""Pool `scripts/evaluate.py results_json=...` files into one comparison table (see gplan/results.py).
 
     # 3 training seeds x 4 eval seeds of one config, plus CEM, on held-out PushT episodes
     for s in 0 1 2; do for e in 42 43 44 45; do
-      python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht-s$s.pt \\
-          --label pusht-mog7 --seed $e --holdout-frac 0.1 --results-json results/pusht-s$s-e$e.json
+      python scripts/evaluate.py task=pusht "policy=[gflow,gflow-refine,cem]" planner=outputs/pusht-s$s.pt \\
+          label=pusht-mog7 seed=$e holdout_frac=0.1 results_json=results/pusht-s$s-e$e.json
     done; done
     python scripts/aggregate_results.py results/*.json --csv results/table.csv
 
@@ -23,7 +23,7 @@ from gplan.results import comparison_table, format_markdown, group_runs, load_ru
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("results", nargs="+", type=Path, help="--results-json files of scripts/evaluate.py")
+    p.add_argument("results", nargs="+", type=Path, help="results_json files of scripts/evaluate.py")
     p.add_argument("--reference", default="cem", help="policy every other policy is paired against")
     p.add_argument("--csv", type=Path, default=None, help="also write the table as CSV")
     args = p.parse_args()

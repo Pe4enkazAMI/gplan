@@ -1,0 +1,8 @@
+# @package _global_
+# The GFlowNet + MALA plans as off-policy data (configs/task/<task>.yaml mala)
+defaults:
+  - gfn
+  - _self_
+ls_steps: ${task.mala.ls_steps}
+ls_every: ${task.mala.ls_every}
+ls_start: ${task.mala.ls_start}

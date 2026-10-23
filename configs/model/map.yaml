@@ -1,0 +1,6 @@
+# @package _global_
+# Amortized MAP planning through LeWM (same network, one plan per condition: evaluate it with
+# gflow_select=mean)
+method: map
+beta: ${task.beta}
+n_batches: ${task.baseline_batches}

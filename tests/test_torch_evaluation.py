@@ -128,9 +128,9 @@ def test_planner_trained_for_another_protocol_is_an_error_unless_allowed(monkeyp
     assert "WARNING" not in capsys.readouterr().out
     for key, value in [("dataset", "pusht_expert_train"), ("ckpt", str(tmp_path / "pusht" / "lewm_object.ckpt")),
                        ("goal_offset", 24), ("n_steps", 4), ("frameskip", 1)]:
-        with pytest.raises(SystemExit, match="ERROR: planner was trained .*--allow-mismatch"):
+        with pytest.raises(SystemExit, match="ERROR: planner was trained .*allow_mismatch=true"):
             check_planner_matches(planner, {**matching, key: value}, args, env_action_dim=2)
-    allowed, _ = evaluate_script().parse_args(["--allow-mismatch"])
+    allowed, _ = evaluate_script().parse_args(["allow_mismatch=true"])
     check_planner_matches(planner, {**matching, "goal_offset": 24, "dataset": "x"}, allowed, env_action_dim=2)
     out = capsys.readouterr().out
     assert "WARNING: planner was trained with goal_offset=24 but eval uses 25" in out
@@ -140,14 +140,14 @@ def test_planner_trained_for_another_protocol_is_an_error_unless_allowed(monkeyp
 def test_refine_settings_default_to_the_planners_training_values():
     """beta (per embedding dim) and s^2 come from the planner's train_args unless --refine-beta is given;
     without a planner, s^2 is --prior-var and the target objective needs --refine-beta."""
-    args, _ = evaluate_script().parse_args(["--prior-var", "2.0"])
+    args, _ = evaluate_script().parse_args(["prior_var=2.0"])
     planner_args = {"beta": 96.0, "ref_var": 0.5}
     assert evaluation.refine_settings(args, planner_args, d=192) == dict(
         steps=20, lr=0.05, objective="target", beta=0.5, reference_var=0.5)
-    given, _ = evaluate_script().parse_args(["--refine-beta", "48", "--refine-steps", "5"])
+    given, _ = evaluate_script().parse_args(["refine_beta=48", "refine_steps=5"])
     assert evaluation.refine_settings(given, planner_args, d=192)["beta"] == 0.25
     assert evaluation.refine_settings(given, None, d=192)["reference_var"] == 1.0  # --prior-var default
-    with pytest.raises(ValueError, match="--refine-beta is needed"):
+    with pytest.raises(ValueError, match="refine_beta is needed"):
         evaluation.refine_settings(args, None, d=192)
-    cost, _ = evaluate_script().parse_args(["--refine-objective", "cost"])
+    cost, _ = evaluate_script().parse_args(["refine_objective=cost"])
     assert evaluation.refine_settings(cost, None, d=192)["beta"] == 0.0  # J alone: beta unused

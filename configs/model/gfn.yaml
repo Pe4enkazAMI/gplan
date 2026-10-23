@@ -1,0 +1,7 @@
+# @package _global_
+# The GFlowNet (TB), with the task's temperature, warmup, length and policy (configs/task/<task>.yaml gfn)
+method: gfn
+beta: ${task.beta}
+beta_warmup: ${task.gfn.beta_warmup}
+n_batches: ${task.gfn.n_batches}
+n_components: ${task.gfn.n_components}

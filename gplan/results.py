@@ -1,10 +1,10 @@
-"""Aggregate `scripts/evaluate.py --results-json` files into paper tables (NumPy only).
+"""Aggregate `scripts/evaluate.py results_json=...` files into paper tables (NumPy only).
 
-A results file is one evaluation run: one `--seed` (one set of episodes) and one planner checkpoint,
+A results file is one evaluation run: one `seed` (one set of episodes) and one planner checkpoint,
 with any number of policies. Runs are pooled per (policy, its settings, label):
     - the same policy + settings + eval seed (+ planner for GFlow policies) is one result; duplicates
       (e.g. CEM evaluated next to several checkpoints) are counted once;
-    - GFlow results with the same `--label` (e.g. three training seeds of one config) are pooled.
+    - GFlow results with the same `label` (e.g. three training seeds of one config) are pooled.
 Success rates get Wilson 95% intervals over the pooled episodes; comparisons with a reference policy
 (CEM by default) are paired on identical episodes, with an exact McNemar test.
 """
@@ -63,8 +63,8 @@ def mcnemar_exact(only_a, only_b):
 
 def policy_settings(policy, args):
     """The flags that change what `policy` did in a run. Recorded but unused flags are left out:
-    --gflow-samples when GFlow executes one plan (--gflow-select sample / mean), and --refine-beta
-    when refinement minimizes the cost alone (--refine-objective cost)."""
+    gflow_samples when GFlow executes one plan (gflow_select sample / mean), and refine_beta
+    when refinement minimizes the cost alone (refine_objective cost)."""
     settings = {k: args.get(k) for k in POLICY_ARGS.get(policy, ())}
     if policy == "gflow" and settings.get("gflow_select") in ("sample", "mean"):
         settings["gflow_samples"] = None

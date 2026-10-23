@@ -65,21 +65,21 @@ def latents(home):
 def trained(home, latents, tmp_path_factory):
     """scripts/train.py for a few steps: mixture policy, MALA, deterministic mode, 1 of 3 episodes held out."""
     out = tmp_path_factory.mktemp("outputs") / "run"
-    run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"),
-         "--n-components", "2", "--ls-steps", "2", "--ls-every", "2", "--n-batches", "4", "--batch-size", "4",
-         "--n-samples", "2", "--beta", "1", "--deterministic", "--holdout-frac", "0.34",
-         "--wandb-mode", "disabled",
-         "--out", str(out)], home)
+    run([script("train.py"), "dataset=toy", f"ckpt={home / 'toy' / 'lewm_object.ckpt'}",
+         "n_components=2", "ls_steps=2", "ls_every=2", "n_batches=4", "batch_size=4",
+         "n_samples=2", "beta=1", "deterministic=true", "holdout_frac=0.34",
+         "wandb_mode=disabled",
+         f"out={out}"], home)
     return out
 
 
-@pytest.mark.parametrize("method, extra", [("bc", []), ("map", []), ("ppo", ["--ent-coef", "1", "--target-kl", "0.02"])])
+@pytest.mark.parametrize("method, extra", [("bc", []), ("map", []), ("ppo", ["ent_coef=1", "target_kl=0.02"])])
 def test_train_baselines(home, latents, tmp_path, method, extra):
     """Each baseline trains a few steps and exports a planner evaluate.py loads (a GPlanner of the same shape)."""
     out = tmp_path / method
-    run([script("train.py"), "--dataset", "toy", "--ckpt", str(home / "toy" / "lewm_object.ckpt"), "--method", method,
-         "--n-batches", "3", "--batch-size", "4", "--beta", "1", "--holdout-frac", "0.34", "--wandb-mode", "disabled",
-         "--out", str(out), *extra], home)
+    run([script("train.py"), "dataset=toy", f"ckpt={home / 'toy' / 'lewm_object.ckpt'}", f"method={method}",
+         "n_batches=3", "batch_size=4", "beta=1", "holdout_frac=0.34", "wandb_mode=disabled",
+         f"out={out}", *extra], home)
     meta = json.loads(Path(f"{out}.json").read_text())
     assert meta["train_args"]["method"] == method and meta["model_kwargs"]["horizon"] == 5 * FRAMESKIP * ENV_ACTION_DIM
     planner, train_args = load_planner(f"{out}.pt")
@@ -104,21 +104,37 @@ def test_train_infers_a_25_value_plan_step_from_5d_actions(home, cube_like, tmp_
     """A plan step is frameskip 5 x 5 = 25 values, read from the data and matching the LeWM action
     encoder; gfn (mixture + MALA) and bc train on it."""
     out = tmp_path / method
-    extra = ["--n-components", "2", "--ls-steps", "2", "--ls-every", "2"] if method == "gfn" else []
-    run([script("train.py"), "--dataset", "ogbench/toy5", "--ckpt", str(cube_like), "--method", method,
-         "--n-batches", "3", "--batch-size", "4", "--n-samples", "2", "--beta", "1", "--wandb-mode", "disabled",
-         "--out", str(out), *extra], home)
+    extra = ["n_components=2", "ls_steps=2", "ls_every=2"] if method == "gfn" else []
+    run([script("train.py"), "dataset=ogbench/toy5", f"ckpt={cube_like}", f"method={method}",
+         "n_batches=3", "batch_size=4", "n_samples=2", "beta=1", "wandb_mode=disabled",
+         f"out={out}", *extra], home)
     meta = json.loads(Path(f"{out}.json").read_text())
     assert meta["train_args"]["action_dim"] == 25 and meta["model_kwargs"]["horizon"] == 5 * 25
 
 
 def test_train_refuses_a_plan_step_the_lewm_cannot_read(home, cube_like, tmp_path):
-    """--frameskip 2 x 5-d actions = 10 values, but the LeWM action encoder takes 25: a clear error."""
-    proc = subprocess.run([sys.executable, script("train.py"), "--dataset", "ogbench/toy5", "--ckpt", str(cube_like),
-                           "--frameskip", "2", "--n-batches", "1", "--wandb-mode", "disabled",
-                           "--out", str(tmp_path / "x")], env=script_env(home), capture_output=True, text=True,
+    """frameskip 2 x 5-d actions = 10 values, but the LeWM action encoder takes 25: a clear error."""
+    proc = subprocess.run([sys.executable, script("train.py"), "dataset=ogbench/toy5", f"ckpt={cube_like}",
+                           "frameskip=2", "n_batches=1", "wandb_mode=disabled",
+                           f"out={tmp_path / 'x'}"], env=script_env(home), capture_output=True, text=True,
                           timeout=600)
     assert proc.returncode != 0 and "action encoder takes 25" in proc.stdout + proc.stderr, proc.stderr[-2000:]
+
+
+def test_run_trains_each_model_once_and_saves_its_config(home, latents, tmp_path):
+    """scripts/run.py stage=train on the toy data: one tiny gfn run with its composed config next to the
+    checkpoint; a second call skips it."""
+    overrides = ["stage=train", "task.dataset=toy", "task.wm=toy/lewm", "task.gfn.n_batches=2", "models=[gfn]",
+                 "seeds=[0]", "ablations=false", "holdout_frac=0.34", "wandb_mode=disabled", f"out={tmp_path}",
+                 "train_overrides={batch_size:4,n_samples:2}"]
+    first = run([script("run.py"), *overrides], home)
+    assert f"=== train {tmp_path}/gfn-s0" in first and (tmp_path / "gfn-s0.pt").exists()
+    config = (tmp_path / "gfn-s0.yaml").read_text()
+    assert config.startswith("# overrides: task.dataset=toy task.wm=toy/lewm task.gfn.n_batches=2 model=gfn seed=0")
+    assert "n_batches: 2\n" in config and "batch_size: 4\n" in config and "dataset: toy\n" in config
+    meta = json.loads((tmp_path / "gfn-s0.json").read_text())["train_args"]
+    assert (meta["method"], meta["n_batches"], meta["beta"], meta["wandb_name"]) == ("gfn", 2, 90.0, "tworoom-gfn-s0")
+    assert f"skip {tmp_path}/gfn-s0 (exists)" in run([script("run.py"), *overrides], home)
 
 
 def test_encode_dataset(home, latents):
@@ -157,7 +173,7 @@ def test_probe_headroom(home, trained):
 
 
 def test_importing_the_training_script_does_not_start_jax():
-    """XLA reads XLA_FLAGS when its backend starts, so `train.py --deterministic` only works if no import
+    """XLA reads XLA_FLAGS when its backend starts, so `train.py deterministic=true` only works if no import
     (gplan.jax.* included) creates a JAX array before main() sets the flag."""
     out = run(["-c", "import runpy; from jax._src import xla_bridge as xb; "
                      f"runpy.run_path({script('train.py')!r}, run_name='not_main'); "
@@ -165,10 +181,9 @@ def test_importing_the_training_script_does_not_start_jax():
     assert out.strip().endswith("idle")
 
 
-def test_evaluate_policy_flag_keeps_order_and_drops_repeats():
+def test_evaluate_policy_list_keeps_order_and_drops_repeats():
     pytest.importorskip("stable_worldmodel")
-    out = run(["-c", "import runpy, sys; sys.argv = ['evaluate.py', '--policy', 'gflow', 'cem', '--policy', "
-                     "'gflow', 'random']; "
+    out = run(["-c", "import runpy, sys; sys.argv = ['evaluate.py', 'policy=[gflow,cem,gflow,random]']; "
                      f"args, _ = runpy.run_path({script('evaluate.py')!r}, run_name='not_main')['parse_args'](); "
                      "print(args.policy)"])
     assert out.strip().endswith("['gflow', 'cem', 'random']")

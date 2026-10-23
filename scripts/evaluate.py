@@ -1,18 +1,19 @@
 """Evaluate a trained GPlanner (GFlowNet) against CEM as MPC planners on TwoRoom, PushT, Reacher or Cube.
+Settings: gplan/config.py EvalArgs (configs/evaluate.yaml), as Hydra overrides.
 
     # head-to-head, one wandb run with a comparison table (CEM always uses its paper settings
-    # unless --cem-* says otherwise)
-    python scripts/evaluate.py --policy gflow cem --planner outputs/gplaner.pt
-    python scripts/evaluate.py --task pusht --policy gflow cem --planner outputs/pusht.pt
+    # unless cem_* says otherwise)
+    python scripts/evaluate.py "policy=[gflow,cem]" planner=outputs/gplaner.pt
+    python scripts/evaluate.py task=pusht "policy=[gflow,cem]" planner=outputs/pusht.pt
 
     # just the GFlowNet, no cost re-ranking (1 sample per replanning step)
-    python scripts/evaluate.py --policy gflow --planner outputs/gplaner.pt --gflow-select sample
+    python scripts/evaluate.py "policy=[gflow]" planner=outputs/gplaner.pt gflow_select=sample
 
     # test-time refinement diagnostic: best-of-64 vs the same samples refined through LeWM, plus CEM
-    python scripts/evaluate.py --task pusht --policy gflow gflow-refine cem --planner outputs/pusht.pt
+    python scripts/evaluate.py task=pusht "policy=[gflow,gflow-refine,cem]" planner=outputs/pusht.pt
 
-    python scripts/evaluate.py --policy cem        # LeWM paper planner
-    python scripts/evaluate.py --policy random     # floor
+    python scripts/evaluate.py "policy=[cem]"      # LeWM paper planner
+    python scripts/evaluate.py "policy=[random]"   # floor
 
 Per policy we log success_rate, wall-clock time, the LeWM cost of the plans that
 were actually executed (recomputed identically for every solver; overall, first replan and
@@ -23,16 +24,15 @@ the planner's compute per replanning step as world-model passes:
     bwd/replan  backward passes, ~2x a forward each: GFlow refine = gflow_samples * refine_steps
 Protocol details: gplan/torch/evaluation.py.
 
-Each policy has its own settings (--gflow-*, --refine-*, --cem-*), so CEM runs with the
-same configuration whatever GFlow checkpoint or flags are evaluated next to it.
+Each policy has its own settings (gflow_*, refine_*, cem_*), so CEM runs with the
+same configuration whatever GFlow checkpoint or settings are evaluated next to it.
 
---task picks the env (and its settings), dataset, LeWM checkpoint and reset calls
-(gplan.torch.evaluation.TASKS);
---env / --dataset / --wm override single fields.
+task picks the env (and its settings), dataset, LeWM checkpoint and reset calls
+(gplan.torch.evaluation.TASKS); env / dataset / wm override single fields.
 """
 
-import argparse
 import json
+import sys
 from itertools import combinations
 from pathlib import Path
 
@@ -40,6 +40,7 @@ import stable_worldmodel as swm
 import torch
 import wandb
 
+from gplan.config import compose_config, EvalArgs, script_overrides, to_args
 from gplan.torch.evaluation import (
     build_policy,
     check_no_leakage,
@@ -57,60 +58,14 @@ from gplan.torch.policy import load_planner
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--policy", nargs="+", action="extend",
-                   choices=["gflow", "gflow-refine", "cem", "prior", "prior-refine", "random"],
-                   help="policies to evaluate on the same episodes, in this order (default: gflow cem); "
-                        "repeating the flag adds to the list")
-    p.add_argument("--planner", default=None, help="[gflow] scripts/train.py checkpoint (.pt)")
-    p.add_argument("--gflow-select", default="min-cost", choices=["min-cost", "sample", "mean"],
-                   help="[gflow] execute the cheapest of --gflow-samples plans, a single sample, or the mean plan")
-    p.add_argument("--prior-samples", type=int, default=64,
-                   help="[prior, prior-refine] plans drawn from N(0, --prior-var I) per replanning step")
-    p.add_argument("--prior-var", type=float, default=1.0, help="[prior, prior-refine] variance of the prior plans")
-    p.add_argument("--refine-steps", type=int, default=20, help="[*-refine] Adam steps on the actions")
-    p.add_argument("--refine-lr", type=float, default=0.05, help="[*-refine] Adam step size (z-scored units)")
-    p.add_argument("--refine-objective", default="target", choices=["target", "cost"],
-                   help="[*-refine] minimize beta*J - log N(A) or J alone")
-    p.add_argument("--refine-beta", type=float, default=None,
-                   help="[*-refine] per-dim beta of the target objective (default: the planner's training beta)")
-    p.add_argument("--task", default="tworoom", choices=sorted(TASKS), help="evaluation task preset")
-    p.add_argument("--wm", default=None, help="LeWM ckpt name relative to $STABLEWM_HOME (default: from --task)")
-    p.add_argument("--dataset", default=None, help="dataset name (default: from --task)")
-    p.add_argument("--env", default=None, help="gymnasium env id (default: from --task)")
-    p.add_argument("--num-eval", type=int, default=50)
-    p.add_argument("--holdout-frac", type=float, default=0.0,
-                   help="draw episodes only from the held-out side of this episode split (train.py --holdout-frac); "
-                        "0 = all episodes, the LeWM protocol")
-    p.add_argument("--split-seed", type=int, default=0, help="seed of the episode split (train.py --split-seed)")
-    p.add_argument("--goal-offset", type=int, default=25)
-    p.add_argument("--eval-budget", type=int, default=50)
-    p.add_argument("--horizon", type=int, default=5)
-    p.add_argument("--action-block", type=int, default=5, help="frameskip")
-    p.add_argument("--gflow-samples", type=int, default=64,
-                   help="[gflow, gflow-refine] plans sampled from the GPlanner per replanning step")
-    p.add_argument("--cem-samples", type=int, default=300, help="[cem] samples per iteration (LeWM paper: 300)")
-    p.add_argument("--cem-steps", type=int, default=30, help="[cem] optimization iterations")
-    p.add_argument("--cem-topk", type=int, default=30, help="[cem] elites kept per iteration")
-    p.add_argument("--img-size", type=int, default=224)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--deterministic", action="store_true",
-                   help="deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower)")
-    p.add_argument("--allow-mismatch", action="store_true",
-                   help="evaluate a planner trained on another dataset / LeWM checkpoint / goal offset / plan layout "
-                        "(an error otherwise)")
-    p.add_argument("--video-dir", default=None, help="save rollout videos under <dir>/<policy>/ (off by default)")
-    p.add_argument("--label", default=None,
-                   help="name of the planner config in --results-json (scripts/aggregate_results.py pools runs "
-                        "with the same label, e.g. several training seeds; default: the planner file's name)")
-    p.add_argument("--results-json", type=Path, default=None,
-                   help="also write every policy's metrics and per-episode successes to this .json")
-    p.add_argument("--wandb-project", default="gplan")
-    p.add_argument("--wandb-mode", default="online", choices=["online", "offline", "disabled"])
-    p.add_argument("--wandb-name", default=None)
-    args = p.parse_args(argv)
+    """(settings namespace, task preset) from the command line (Hydra overrides). Unset policy, wm,
+    dataset, env and device take their defaults here: [gflow, cem], the task preset's, cuda if available."""
+    overrides = script_overrides(sys.argv[1:] if argv is None else argv, __doc__, "evaluate")
+    args = to_args(compose_config("evaluate", overrides), EvalArgs)
+    if args.task not in TASKS:
+        raise SystemExit(f"task={args.task!r} is not one of {sorted(TASKS)}")
     args.policy = list(dict.fromkeys(args.policy or ["gflow", "cem"]))  # keep the order, drop repeats
+    args.device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     task = TASKS[args.task]
     args.wm = args.wm or task.wm
     args.dataset = args.dataset or task.dataset
@@ -125,7 +80,9 @@ def write_results(path, args, rows, successes, episodes, start_steps, planner_tr
            "episodes": [[int(e), int(s)] for e, s in zip(episodes, start_steps)],
            "planner_train_args": planner_train_args,
            "policies": {name: {**m, "episode_successes": successes[name].tolist()} for name, m in rows}}
-    Path(path).write_text(json.dumps(out, indent=2))
+    tmp = Path(f"{path}.tmp")  # complete or absent: scripts/run.py skips existing results
+    tmp.write_text(json.dumps(out, indent=2))
+    tmp.replace(path)
     print(f"wrote {path}")
 
 

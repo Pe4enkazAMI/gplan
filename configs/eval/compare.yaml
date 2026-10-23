@@ -1,0 +1,23 @@
+# Every model and the planner-free baselines on the same episodes (included by heldout.yaml and
+# alldata.yaml). A run: `name` of its results file ({model}, {seed}, {eval_seed}), the `models` whose
+# checkpoints it evaluates (one run per model and training seed; none: no planner), the `policy` list,
+# the `refine` objective of the *-refine policies (run.yaml refine) and any other evaluate.py `args`.
+runs:
+  - name: baselines-e{eval_seed}            # CEM (the LeWM paper's 300 x 30), best of 64 random plans, refined
+    policy: [cem, prior, prior-refine]
+    refine: target
+  - name: baselines-refine-cost-e{eval_seed}
+    policy: [prior-refine]
+    refine: cost
+  - name: "{model}-s{seed}-e{eval_seed}"    # best of 64 samples, and the same 64 + 20 gradient steps
+    models: [gfn, gfn-mala, bc, ppo, ppo-maxent]
+    policy: [gflow, gflow-refine]
+    refine: target
+  - name: "{model}-refine-cost-s{seed}-e{eval_seed}"
+    models: [gfn, gfn-mala, bc, ppo, ppo-maxent]
+    policy: [gflow-refine]
+    refine: cost
+  - name: "{model}-s{seed}-e{eval_seed}"    # map: its single plan
+    models: [map]
+    policy: [gflow]
+    args: [gflow_select=mean]

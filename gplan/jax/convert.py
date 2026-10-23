@@ -22,7 +22,7 @@ from gplan.jax.policy import GPlanner
 def _key():
     """Layers are created with throwaway random weights, then overwritten. A function, not a
     module-level key: creating a key starts the JAX backend, which must wait until scripts have
-    set XLA_FLAGS (see `scripts/train.py --deterministic`)."""
+    set XLA_FLAGS (see `scripts/train.py deterministic=true`)."""
     return jax.random.key(0)
 
 

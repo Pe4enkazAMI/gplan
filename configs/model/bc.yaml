@@ -1,0 +1,4 @@
+# @package _global_
+# Behavior cloning on the expert actions between start and goal (same network)
+method: bc
+n_batches: ${task.baseline_batches}

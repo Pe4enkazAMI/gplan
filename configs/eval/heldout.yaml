@@ -1,0 +1,7 @@
+# The main comparison, on the episodes no model was trained on -> <results>/heldout/
+defaults:
+  - compare
+  - _self_
+dir: heldout
+episodes: ["holdout_frac=${holdout_frac}", "split_seed=${split_seed}"]
+table: {name: heldout, files: ["heldout/*.json"]}
