@@ -50,7 +50,7 @@ def test_mixture_with_local_search_gives_both_modes_their_mass(seed):
     is asserted per seed."""
     model = jp.GPlaner(state_dim=D, horizon=1, hidden_size=32, n_components=2, key=init_key(seed))
     batch = (np.zeros((64, D), np.float32), np.zeros((64, D), np.float32))
-    cfg = TrainConfig(loss_type="tb", n_samples=1, action_dim=1, reference_var=4.0, grad_clip=10.0,
+    cfg = TrainConfig(n_samples=1, action_dim=1, reference_var=4.0, grad_clip=10.0,
                       ls_steps=10, ls_step_size=0.01)
     model, _ = train(model, DoubleWell(), [batch] * 1500, 1.0, cfg, lr=1e-3, lr_z=1e-2, seed=seed, log_every=10**9)
     z = jnp.zeros((4000, D))

@@ -38,9 +38,7 @@ import wandb
 
 from gplan.jax.distributions import normal_log_prob
 from gplan.jax.policy import rollout, step_log_probs
-from gplan.jax.train import TRAIN_STREAM
-
-CRITIC_STREAM = 2  # the critic's initial weights; INIT_STREAM / TRAIN_STREAM (gplan.jax.train) are 0 / 1
+from gplan.jax.train import CRITIC_STREAM, TRAIN_STREAM
 
 
 def critic_key(seed):
@@ -154,6 +152,9 @@ def make_iteration(optimizer, cfg: PPOConfig):
         z_start = jnp.repeat(z_start, cfg.n_samples, axis=0)
         z_goal = jnp.repeat(z_goal, cfg.n_samples, axis=0)
         n = z_start.shape[0]
+        if n % cfg.minibatches:  # shapes are static: this runs once, when the iteration is compiled
+            raise ValueError(f"{n} plans per iteration (batch x n_samples) do not split into {cfg.minibatches} "
+                             f"equal minibatches")
         k_rollout, k_shuffle = jax.random.split(key)
 
         # 1. rollout with the current (= old) policy; nothing here is differentiated
@@ -170,9 +171,8 @@ def make_iteration(optimizer, cfg: PPOConfig):
 
         # 3. epochs x minibatches of clipped updates over a fresh permutation per epoch; with target_kl > 0,
         # the epochs after one whose mean approx KL exceeds it are skipped
-        size = n // cfg.minibatches
         perms = jax.vmap(lambda k: jax.random.permutation(k, n))(jax.random.split(k_shuffle, cfg.epochs))
-        order = perms[:, :size * cfg.minibatches].reshape(cfg.epochs, cfg.minibatches, size)
+        order = perms.reshape(cfg.epochs, cfg.minibatches, n // cfg.minibatches)
         arrays, static = eqx.partition(params, eqx.is_array)  # lax.scan carries arrays only
 
         def minibatch(carry, idx):

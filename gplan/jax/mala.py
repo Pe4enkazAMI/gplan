@@ -10,7 +10,7 @@ using only the world model's gradient (no expert, no external planner). One step
     accept with prob. min(1, P*(A') q(A | A') / (P*(A) q(A' | A))),  q(y | x) = N(y; x + eta grad log P*(x), 2 eta I)
 
 The Metropolis-Hastings correction keeps the chain on the target (it does not drift into
-regions where the world model is wrong but J looks good). TB / VarGrad stay valid on these
+regions where the world model is wrong but J looks good). TB stays valid on these
 plans because both losses only need log P_F of a given plan (teacher forcing).
 """
 

@@ -7,7 +7,6 @@ Needs precomputed embeddings (scripts/encode_dataset.py). Writes outputs/<name>.
 the .pt is what scripts/evaluate.py loads.
 
     python scripts/train.py --beta 120 --wandb-name tb-beta120 --out outputs/tb-beta120
-    python scripts/train.py --loss vargrad --n-samples 8
     python scripts/train.py --n-components 4             # EXP: mixture of 4 Gaussians per plan step
     python scripts/train.py --ls-steps 10                 # EXP: + 10 MALA steps per plan as off-policy data
     python scripts/train.py --method bc                   # baseline: behavior cloning on expert actions
@@ -15,7 +14,7 @@ the .pt is what scripts/evaluate.py loads.
     python scripts/train.py --method ppo --beta 120       # baseline: PPO maximizing -beta J + log N (classic)
     python scripts/train.py --method ppo --ent-coef 1     # PPO whose optimum is the GFlowNet target (max-ent)
 
-See gplan/jax/losses.py for the target distribution and the two losses.
+See gplan/jax/losses.py for the target distribution and the loss.
 """
 
 import argparse
@@ -54,7 +53,7 @@ def parse_args():
     p.add_argument("--method", default="gfn", choices=["gfn", "bc", "map", "ppo"],
                    help="gfn: the GFlowNet; bc: behavior cloning on expert plans; map: amortized MAP planning "
                         "(gplan/jax/baselines.py); ppo: PPO with a critic (gplan/jax/ppo.py, flags [ppo]). bc / map / "
-                        "ppo ignore the GFlowNet-only flags (loss, MALA, beta warmup)")
+                        "ppo ignore the GFlowNet-only flags (MALA, beta warmup)")
     p.add_argument("--ckpt", type=Path, default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
     p.add_argument("--dataset", default="tworoom", help="dataset name under $STABLEWM_HOME")
     p.add_argument("--latents", type=Path, default=None,
@@ -70,8 +69,7 @@ def parse_args():
                         "which must be the input size of LeWM's action encoder")
     p.add_argument("--n-components", type=int, default=1,
                    help="EXP mixture policy: Gaussians per plan step (1 = a single diagonal Gaussian)")
-    p.add_argument("--loss", default="tb", choices=["vargrad", "tb"])
-    p.add_argument("--n-samples", type=int, default=8, help="plans sampled per (start, goal); vargrad needs >= 2")
+    p.add_argument("--n-samples", type=int, default=8, help="plans sampled per (start, goal)")
     p.add_argument("--beta", type=float, default=1.0,
                    help="final cost temperature, per embedding dim (the raw cost is scaled by beta / embed_dim)")
     p.add_argument("--beta-start", type=float, default=0.0, help="initial beta when annealing, same units as --beta")
@@ -137,7 +135,7 @@ def main():
     model_kwargs = dict(state_dim=d, horizon=args.n_steps * args.action_dim, action_dim=args.action_dim,
                         n_components=args.n_components)
     model = GPlaner(**model_kwargs, key=init_key(args.seed))
-    cfg = TrainConfig(loss_type=args.loss, n_samples=args.n_samples, action_dim=args.action_dim,
+    cfg = TrainConfig(n_samples=args.n_samples, action_dim=args.action_dim,
                       reference_var=args.ref_var, grad_clip=args.grad_clip, ls_steps=args.ls_steps,
                       ls_every=args.ls_every, ls_start=args.ls_start, ls_step_size=args.ls_step_size,
                       ls_target_accept=args.ls_target_accept)

@@ -17,7 +17,10 @@ def lewm_action_stats(actions):
     StandardScaler does). The stds differ by a factor sqrt(N / (N - 1)), i.e. ~1 / (2N) relative:
     negligible for datasets of thousands of frames, so plans mean the same thing on both sides."""
     a = actions[~np.isnan(actions).any(axis=1)]
-    return a.mean(0), a.std(0, ddof=1)
+    mean, std = a.mean(0), a.std(0, ddof=1)
+    if (std == 0).any():  # LeWM's normalizer divides by it too: a constant action dim is not a LeWM dataset
+        raise ValueError(f"action dimension(s) {np.nonzero(std == 0)[0].tolist()} are constant in the dataset")
+    return mean, std
 
 
 def expert_plans(actions, rows, goal_offset, n_steps, mean, std):

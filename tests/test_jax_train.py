@@ -1,4 +1,4 @@
-"""Training: the jitted loop reaches the closed-form TB / VarGrad optimum (with and without MALA plans),
+"""Training: the jitted loop reaches the closed-form TB optimum (with and without MALA plans),
 and a run trained on the tiny LeWM exports to the PyTorch checkpoint evaluation loads."""
 
 import math
@@ -15,11 +15,13 @@ from toy_costs import QuadraticCost
 
 from gplan.jax import checkpoint
 from gplan.jax import policy as jp
+from gplan.jax import train as train_module
 from gplan.jax.convert import gplaner_to_torch, lewm_from_torch
 from gplan.jax.train import (
     init_key,
     linear_beta_schedule,
     make_optimizer,
+    MALA_STREAM,
     norm_stats,
     train,
     TRAIN_STREAM,
@@ -29,36 +31,32 @@ from gplan.torch.policy import load_planner, Sampler
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("loss_type, ls_steps", [("tb", 0), ("vargrad", 0), ("tb", 5), ("vargrad", 5)],
-                         ids=["tb", "vargrad", "tb-mala", "vargrad-mala"])
-def test_train_converges_to_analytic_solution(loss_type, ls_steps):
+@pytest.mark.parametrize("ls_steps", [0, 5], ids=["tb", "tb-mala"])
+def test_train_converges_to_analytic_solution(ls_steps):
     """Training from a random init reaches the closed-form optimum. With J = ||A||^2 and N(0, s^2 I):
     each action ~ N(0, 1 / (2 beta + 1 / s^2)) = N(0, 0.2), log Z = -(H / 2) log(1 + 2 beta s^2), for
     every one of the 64 conditions, with and without MALA plans in the batch (off-policy).
 
     Constant learning rates (as in scripts/train.py): the last iterate keeps jittering around the
     optimum, by about the learning rate, so the rates are low (3e-4 / 3e-3) and the run long (6000
-    steps). Tolerances are ~2.5x the worst error over 8 seeds x 4 variants (calibration below); the
+    steps). Tolerances are 2-6x the worst error over 8 seeds x 2 variants (calibration below); the
     analytic numbers are exact, see tests/test_jax_optimum.py for the objective itself."""
     beta, s2, H, steps = 2.0, 1.0, T * A, 6000
-    K = 1 if loss_type == "tb" else 8
-    n_cond = 64 // K
     model = jp.GPlaner(state_dim=D, horizon=H, hidden_size=64, key=init_key(0))  # scalar layout
     rng = np.random.default_rng(0)
-    batch = (rng.normal(size=(n_cond, D)).astype(np.float32), rng.normal(size=(n_cond, D)).astype(np.float32))
-    cfg = TrainConfig(loss_type=loss_type, n_samples=K, action_dim=1, reference_var=s2, grad_clip=10.0,
-                      ls_steps=ls_steps, ls_step_size=0.05)
+    batch = (rng.normal(size=(64, D)).astype(np.float32), rng.normal(size=(64, D)).astype(np.float32))
+    cfg = TrainConfig(n_samples=1, action_dim=1, reference_var=s2, grad_clip=10.0, ls_steps=ls_steps, ls_step_size=0.05)
     model, losses = train(model, QuadraticCost(), [batch] * steps, beta, cfg, lr=3e-4, lr_z=3e-3, log_every=10**9)
 
-    zs, zg = (jnp.repeat(jnp.asarray(x), K, axis=0) for x in batch)
+    zs, zg = (jnp.asarray(x) for x in batch)
     plans = jax.vmap(lambda k, s, g: jp.rollout(model, k, s, g))(jax.random.split(jax.random.key(1), len(zs)), zs, zg)
     _, dists = jax.vmap(lambda s, g, p: jp.step_log_probs(model, s, g, p))(zs, zg, plans)
     variances, log_z = np.asarray(dists.stds) ** 2, np.asarray(jax.vmap(model.log_Z)(zs, zg))
     target_var, target_log_z = 1 / (2 * beta + 1 / s2), -H / 2 * math.log(1 + 2 * beta * s2)  # 0.2, -4.83
 
-    # worst over 8 seeds x 4 variants (calibration): last-100 loss 0.014, every |mean| 0.023, every
-    # |var - 0.2| 0.042, |mean var - 0.2| 0.0043, every |log Z - target| 0.028. (Dropping the prior
-    # term would give var 0.25 and log Z +1.35.)
+    # worst over 8 seeds x {without, with MALA} (calibration): last-100 loss 0.0064, every |mean| 0.016,
+    # every |var - 0.2| 0.022, |mean var - 0.2| 0.0017, every |log Z - target| 0.028. (Dropping the
+    # prior term would give var 0.25 and log Z +1.35.)
     assert np.mean(losses[-100:]) < 0.04 < losses[0]
     assert np.abs(np.asarray(dists.means)).max() < 0.05
     assert np.abs(variances - target_var).max() < 0.1
@@ -73,7 +71,7 @@ def test_train_with_lewm_then_export_to_torch(wm, tmp_path, n_components):
     model = jp.GPlaner(**model_kwargs, key=init_key(0))
     rng = np.random.default_rng(0)
     batches = [(rng.normal(size=(B, D)).astype(np.float32), rng.normal(size=(B, D)).astype(np.float32))] * 3
-    cfg = TrainConfig(loss_type="tb", n_samples=2, action_dim=A, grad_clip=10.0)
+    cfg = TrainConfig(n_samples=2, action_dim=A, grad_clip=10.0)
     model, losses = train(model, lewm_from_torch(wm), batches, 0.5, cfg, log_every=100)
     assert len(losses) == 3 and all(math.isfinite(l) for l in losses)
 
@@ -101,7 +99,7 @@ def test_training_is_reproducible_and_seeds_matter():
         model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, n_components=2, key=init_key(seed))
         rng = np.random.default_rng(0)
         batches = [(rng.normal(size=(B, D)).astype(np.float32), rng.normal(size=(B, D)).astype(np.float32))] * 5
-        cfg = TrainConfig(loss_type="tb", n_samples=2, action_dim=A, grad_clip=10.0, ls_steps=2, ls_every=2)
+        cfg = TrainConfig(n_samples=2, action_dim=A, grad_clip=10.0, ls_steps=2, ls_every=2)
         return train(model, QuadraticCost(), batches, 0.5, cfg, seed=seed, log_every=10**9)
 
     (m1, l1), (m2, l2), (_, l3) = run(0), run(0), run(1)
@@ -110,6 +108,33 @@ def test_training_is_reproducible_and_seeds_matter():
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
     assert not np.array_equal(jax.random.key_data(init_key(0)),
                               jax.random.key_data(jax.random.fold_in(jax.random.key(0), TRAIN_STREAM)))
+
+
+def test_mala_draws_from_its_own_random_stream(monkeypatch):
+    """MALA's key at each training step comes from MALA_STREAM, not from the key the on-policy plans are
+    drawn with (the plans use split(step_key, n): MALA must not reuse any of those keys)."""
+    seen = []
+
+    def spy(cost_model, key, *args, **kwargs):
+        jax.debug.callback(lambda k: seen.append(np.asarray(k)), jax.random.key_data(key))
+        return mala(cost_model, key, *args, **kwargs)
+
+    mala = train_module.mala
+    monkeypatch.setattr(train_module, "mala", spy)
+    model = jp.GPlaner(state_dim=D, horizon=T * A, action_dim=A, key=init_key(0))
+    batch = (np.zeros((B, D), np.float32), np.zeros((B, D), np.float32))
+    cfg = TrainConfig(n_samples=2, action_dim=A, ls_steps=1)
+    train(model, QuadraticCost(), [batch] * 2, 0.5, cfg, seed=0, log_every=10**9)
+
+    key = jax.random.fold_in(jax.random.key(0), TRAIN_STREAM)
+    ls_key = jax.random.fold_in(jax.random.key(0), MALA_STREAM)
+    assert len(seen) == 2
+    for step in range(2):
+        key, step_key = jax.random.split(key)
+        ls_key, step_ls_key = jax.random.split(ls_key)
+        np.testing.assert_array_equal(seen[step], jax.random.key_data(step_ls_key))
+        plan_keys = jax.random.key_data(jax.random.split(step_key, B * 2))
+        assert not any(np.array_equal(seen[step], k) for k in plan_keys)
 
 
 def test_beta_schedule():

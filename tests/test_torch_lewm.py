@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from conftest import A, ARPredictor, B, D, DummyEncoder, Embedder, HS, JEPA, make_wm, MLP, randomize_, T
 
-from gplan.torch.lewm import encode, history_length, lewm_cost, lewm_cost_grad
+from gplan.torch.lewm import check_history, encode, history_length, lewm_cost, lewm_cost_grad
 
 
 def test_encode_shape(wm, batch):
@@ -48,6 +48,8 @@ def test_history_size_comes_from_the_checkpoint(batch):
         pred_proj=MLP(D, 16, D, norm_fn=nn.BatchNorm1d),
     ))
     assert history_length(wm) == 2
+    with pytest.raises(ValueError, match="context is 2 frames"):  # CEM would plan with 3: a different cost
+        check_history(wm)
     z_start, z_goal = encode(wm, batch[0]), encode(wm, batch[1])
     actions = torch.randn(B, T, A)
     ours = lewm_cost(wm, z_start, z_goal, actions)
@@ -68,3 +70,7 @@ def test_cost_grad_has_the_same_value_and_a_gradient(batch):
     torch.testing.assert_close(value.detach(), lewm_cost(wm, z_start, z_goal, actions))
     value.sum().backward()
     assert torch.isfinite(actions.grad).all() and actions.grad.abs().sum() > 0
+
+
+def test_check_history_passes_the_lewm_context(wm):
+    assert history_length(wm) == 3 and check_history(wm) is wm

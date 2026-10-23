@@ -98,8 +98,8 @@ def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
 
 def load_lewm_predictor(ckpt_path):
     """Load a PyTorch LeWM `*_object.ckpt` on CPU and return its predictor as an Equinox module."""
-    from gplan.torch.lewm import load_lewm  # puts le-wm on sys.path, needed to unpickle the checkpoint
-    return lewm_from_torch(load_lewm(ckpt_path, "cpu"))
+    from gplan.torch.lewm import check_history, load_lewm  # puts le-wm on sys.path, needed to unpickle
+    return lewm_from_torch(check_history(load_lewm(ckpt_path, "cpu")))
 
 
 # ----------------------------------------------------------------------------- GPlaner

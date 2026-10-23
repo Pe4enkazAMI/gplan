@@ -3,7 +3,7 @@
 Modules
     lewm        LeWM predictor in Equinox and the planning cost J(A, c)
     policy      GPlaner, sampling, teacher-forced log-probs
-    losses      Trajectory Balance and VarGrad losses + diagnostics
+    losses      the Trajectory Balance loss + diagnostics
     mala        MALA local search on plans (off-policy training samples)
     latents     (start, goal) latent pairs from precomputed embeddings
     train       optimizer, jitted train step, training loop

@@ -8,7 +8,7 @@ A goal-conditioned autoregressive policy, `GPlaner`, learns to sample action pla
 
 where J is the frozen LeWM planning cost: the squared distance between the latent that LeWM
 predicts after executing A and the goal latent. Each plan step is a diagonal Gaussian or a mixture
-of them. The policy is trained with Trajectory Balance or VarGrad (optionally with MALA local
+of them. The policy is trained with Trajectory Balance (optionally with MALA local
 search as off-policy data) and used as an MPC planner (best-of-N under the LeWM cost), compared
 against LeWM's CEM planner on the LeWM evaluation protocol.
 
@@ -32,7 +32,7 @@ gplan/
     lewm.py            the LeWM predictor in Equinox and J (checked against PyTorch)
     distributions.py   DiagGaussianMixture, normal / reference log-probs
     policy.py          GPlaner, sampling, teacher-forced step log-probs
-    losses.py          TB and VarGrad on xi = log P_F + β'J − log N(A), diagnostics
+    losses.py          Trajectory Balance on xi = log P_F + β'J − log N(A), diagnostics
     mala.py            MALA local search on plans (off-policy training samples)
     baselines.py       behavior cloning and amortized MAP planning with the same network
     ppo.py             PPO baseline: the same network as an RL policy, PPO-clip + GAE + a learned critic
@@ -252,7 +252,7 @@ process peaks at about 2.6 GB.
 JAX code is checked against the PyTorch code on identical weights (cost, policy, losses and
 gradients), the PyTorch probability code against `torch.distributions`, the losses against the
 closed-form optimum (exactly 0 there for any plan, `tests/test_jax_optimum.py`), training against
-that optimum from a random init (TB / VarGrad, with and without MALA), and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
+that optimum from a random init (TB, with and without MALA), and `scripts/evaluate.py` end to end on a tiny real `stable_worldmodel` setup
 (CEM identical whatever GFlow checkpoint runs next to it, every policy reproducible).
 
 The losses take the plan costs as data, and `step_log_probs` scores any plan, so new plan

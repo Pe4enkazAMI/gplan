@@ -51,7 +51,7 @@ from gplan.torch.evaluation import (
     trained_on,
     use_deterministic_algorithms,
 )
-from gplan.torch.lewm import embed_dim
+from gplan.torch.lewm import check_history, embed_dim
 from gplan.torch.policy import load_planner
 
 
@@ -96,6 +96,9 @@ def parse_args(argv=None):
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--deterministic", action="store_true",
                    help="deterministic cuDNN / cuBLAS kernels: bit-identical GPU reruns (slower)")
+    p.add_argument("--allow-mismatch", action="store_true",
+                   help="evaluate a planner trained on another dataset / LeWM checkpoint / goal offset / plan layout "
+                        "(an error otherwise)")
     p.add_argument("--video-dir", default=None, help="save rollout videos under <dir>/<policy>/ (off by default)")
     p.add_argument("--label", default=None,
                    help="name of the planner config in --results-json (scripts/aggregate_results.py pools runs "
@@ -115,16 +118,21 @@ def parse_args(argv=None):
 
 
 def check_planner_matches(planner, train_args, args, env_action_dim):
-    """Warn about train/eval protocol mismatches and assert the plan layout fits the env."""
+    """Stop on train / eval protocol mismatches (dataset, LeWM checkpoint, goal offset, plan steps,
+    frameskip; warnings instead with --allow-mismatch) and assert the plan layout fits the env."""
     if train_args is not None:
         wandb.config.update({"planner_train_args": train_args})
-        for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon), ("dataset", args.dataset),
-                          ("frameskip", args.action_block)):
-            if k in train_args and train_args[k] != eval_v:
-                print(f"WARNING: planner was trained with {k}={train_args[k]} but eval uses {eval_v}")
+        mismatches = [f"planner was trained with {k}={train_args[k]} but eval uses {eval_v}"
+                      for k, eval_v in (("goal_offset", args.goal_offset), ("n_steps", args.horizon),
+                                        ("dataset", args.dataset), ("frameskip", args.action_block))
+                      if k in train_args and train_args[k] != eval_v]
         eval_ckpt = (STABLEWM_HOME / f"{args.wm}_object.ckpt").resolve()
         if "ckpt" in train_args and Path(train_args["ckpt"]).resolve() != eval_ckpt:
-            print(f"WARNING: planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
+            mismatches.append(f"planner was trained against {train_args['ckpt']} but eval scores plans with {eval_ckpt}")
+        if mismatches and not args.allow_mismatch:
+            raise SystemExit("ERROR: " + "; ".join(mismatches) + " (--allow-mismatch to evaluate anyway)")
+        for msg in mismatches:
+            print(f"WARNING: {msg}")
     if (train_args or {}).get("method") == "map" and args.gflow_select != "mean":
         print("WARNING: a --method map planner is trained for one plan per condition (its stds are untrained); "
               "evaluate it with --gflow-select mean")
@@ -212,7 +220,7 @@ def main():
     # -- shared frozen world model and (optionally) the trained planner
     wm = planner = refine = train_args = None
     if any(name != "random" for name in args.policy):
-        wm = swm.policy.AutoCostModel(args.wm).to(args.device)
+        wm = check_history(swm.policy.AutoCostModel(args.wm).to(args.device))
         wm.eval().requires_grad_(False)
     if any(name.startswith("gflow") for name in args.policy):
         planner, train_args = load_planner(args.planner, args.device)

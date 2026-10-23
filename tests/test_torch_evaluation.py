@@ -1,6 +1,7 @@
 """Evaluation protocol: task presets and LeWM-identical start sampling (needs the `eval` extra)."""
 
 import importlib.util
+import types
 from pathlib import Path
 
 import numpy as np
@@ -111,3 +112,27 @@ def test_trained_on_follows_the_planners_recorded_split():
     train_eps, held = split_episodes(ds.get_col_data("ep_idx"), 0.3, 1)
     assert trained_on(ds, held.tolist(), {"holdout_frac": 0.3, "split_seed": 1}) == []
     assert trained_on(ds, [int(train_eps[0])], {"holdout_frac": 0.3, "split_seed": 1}) == [int(train_eps[0])]
+
+
+def test_planner_trained_for_another_protocol_is_an_error_unless_allowed(monkeypatch, tmp_path, capsys):
+    """Dataset, LeWM checkpoint, goal offset, plan steps or frameskip differing from the evaluation's stop
+    it; --allow-mismatch turns the errors into warnings. Keys the planner did not record are not compared."""
+    module = evaluate_script()
+    monkeypatch.setattr(module, "wandb", types.SimpleNamespace(config=types.SimpleNamespace(update=lambda _: None)))
+    monkeypatch.setattr(module, "STABLEWM_HOME", tmp_path)
+    args, _ = module.parse_args([])  # TwoRoom: dataset tworoom, wm tworoom/lewm, goal offset 25, 5 steps, frameskip 5
+    planner = types.SimpleNamespace(horizon=5 * 5 * 2)  # 5 steps x frameskip 5 x 2-d env actions
+    matching = {"dataset": "tworoom", "ckpt": str(tmp_path / "tworoom" / "lewm_object.ckpt"), "goal_offset": 25,
+                "n_steps": 5, "frameskip": 5, "beta": 90.0}
+    for train_args in (matching, {"beta": 90.0}, None):
+        module.check_planner_matches(planner, train_args, args, env_action_dim=2)
+    assert "WARNING" not in capsys.readouterr().out
+    for key, value in [("dataset", "pusht_expert_train"), ("ckpt", str(tmp_path / "pusht" / "lewm_object.ckpt")),
+                       ("goal_offset", 24), ("n_steps", 4), ("frameskip", 1)]:
+        with pytest.raises(SystemExit, match="ERROR: planner was trained .*--allow-mismatch"):
+            module.check_planner_matches(planner, {**matching, key: value}, args, env_action_dim=2)
+    allowed, _ = module.parse_args(["--allow-mismatch"])
+    module.check_planner_matches(planner, {**matching, "goal_offset": 24, "dataset": "x"}, allowed, env_action_dim=2)
+    out = capsys.readouterr().out
+    assert "WARNING: planner was trained with goal_offset=24 but eval uses 25" in out
+    assert "WARNING: planner was trained with dataset=x but eval uses tworoom" in out

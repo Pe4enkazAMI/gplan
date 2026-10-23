@@ -136,3 +136,11 @@ def test_ppo_is_reproducible_and_seeds_matter():
     assert r1 == r2 and r1 != r3
     for a, b in zip(jax.tree.leaves(eqx.filter((p1, c1), eqx.is_array)), jax.tree.leaves(eqx.filter((p2, c2), eqx.is_array))):
         np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+
+def test_ppo_minibatches_must_split_the_plans_evenly():
+    """3 conditions x 2 plans = 6 plans cannot be cut into 4 equal minibatches: an error, not a
+    silently dropped remainder."""
+    cfg = PPOConfig(n_samples=2, action_dim=A, minibatches=4)
+    with pytest.raises(ValueError, match="6 plans per iteration .* do not split into 4"):
+        run_ppo(QuadraticCost(), cfg, iters=1, n_cond=3)

@@ -56,6 +56,13 @@ def test_lewm_action_stats_drop_nan_rows_and_use_ddof_1():
     np.testing.assert_allclose(std, np.std([[1, 2], [3, 4], [5, 9]], axis=0, ddof=1))
 
 
+def test_lewm_action_stats_reject_a_constant_action_dimension():
+    """LeWM z-scores actions with these stds: a constant dimension would divide by zero."""
+    actions = np.array([[1.0, 2.0, 0.5], [3.0, 2.0, 0.5], [np.nan, 0.0, 1.0], [5.0, 2.0, 0.5]])  # NaN row dropped
+    with pytest.raises(ValueError, match=r"dimension\(s\) \[1, 2\] are constant"):
+        lewm_action_stats(actions)
+
+
 def test_expert_batches_hold_the_actions_between_start_and_goal(tmp_path):
     """Actions encode their row (a[r] = (r, -r)), so every plan can be traced back to its start row."""
     n_eps, ep_len, offset = 3, 30, 10

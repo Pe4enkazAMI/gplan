@@ -1,11 +1,10 @@
-"""GFlowNet losses for the conditional plan sampler (JAX port of the PyTorch losses, same formulas and stats).
+"""Trajectory Balance loss for the conditional plan sampler (JAX port of the PyTorch formulas and stats).
 
 Target:  P*(A | c)  ∝  exp(-beta * J(A, c)) * N(A; 0, s^2 I),  c = (z_start, z_goal)
 
     xi(A, c) = sum_t log P_F(a_t | a_<t, c) + beta * J(A, c) - log N(A)       (= -log Z(c) at optimum)
 
-  tb:       ( log Z(c) + xi )^2                 with log Z(c) a learned head
-  vargrad:  Var_k[ xi(A_k, c) ]  over K plans   of the same c; log Z(c) is the in-batch mean -xi
+  tb:  ( log Z(c) + xi )^2      with log Z(c) a learned head
 
 The cost J is passed in as data (computed without gradient), so plans and their costs can come
 from anywhere. Standard deviations use ddof=1, like torch, so logged numbers are comparable.
@@ -45,30 +44,8 @@ def tb_loss(model, z_start, z_goal, actions, cost, beta, reference_var):
     return loss, {**plan_stats(terms, residual, beta), "tb/log_z": terms["log_z"].mean()}
 
 
-def vargrad_loss(model, z_start, z_goal, actions, cost, beta, reference_var, n_samples):
-    """VarGrad: variance of xi over the K plans of each condition, plus a regression of the
-    log Z head onto the in-batch estimate (for diagnostics only; the two terms share no gradient).
-
-    Rows are grouped by condition: plan i belongs to condition i // K (`jnp.repeat(z, K, axis=0)`).
-    """
-    terms = plan_terms(model, z_start, z_goal, actions, cost, reference_var)
-    xi_bk = xi(terms, beta).reshape(-1, n_samples)                 # (B, K)
-    var_loss = jnp.mean(jnp.var(xi_bk, axis=1, ddof=1))
-
-    log_z_hat = jax.lax.stop_gradient(-xi_bk.mean(axis=1))         # (B,) in-batch log Z(c)
-    log_z_head = terms["log_z"].reshape(-1, n_samples)[:, 0]       # (B,) one per condition
-    z_fit_loss = jnp.mean((log_z_head - log_z_hat) ** 2)
-
-    residual = (xi_bk - xi_bk.mean(axis=1, keepdims=True)).reshape(-1)
-    stats = {**plan_stats(terms, residual, beta),
-             "loss/vargrad": var_loss, "loss/z_fit": z_fit_loss,
-             "tb/log_z": log_z_head.mean(), "tb/log_z_hat": log_z_hat.mean(),
-             "tb/log_z_hat_std": jnp.std(log_z_hat, ddof=1)}
-    return var_loss + z_fit_loss, stats
-
-
 def plan_stats(terms, residual, beta):
-    """Scalar diagnostics shared by both losses (same names as the PyTorch version)."""
+    """Scalar diagnostics of the TB loss (same names as the PyTorch version)."""
     terms = jax.lax.stop_gradient(terms)
     residual = jax.lax.stop_gradient(residual)
     cost, dists = terms["cost"], terms["dists"]  # dists: (N, n_steps) mixtures

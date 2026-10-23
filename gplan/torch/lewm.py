@@ -50,6 +50,18 @@ def history_length(wm):
     return wm.predictor.pos_embedding.shape[1]
 
 
+CEM_HISTORY = 3  # the context swm's CEMSolver plans with: JEPA.get_cost -> JEPA.rollout(history_size=3)
+
+
+def check_history(wm):
+    """Our planning cost uses the predictor's own context length (`history_length`), CEM the fixed 3 of
+    JEPA.rollout: stop if they differ, so every planner is scored by the same J. Returns `wm`."""
+    if history_length(wm) != CEM_HISTORY:
+        raise ValueError(f"LeWM predictor context is {history_length(wm)} frames, but swm's CEM plans with "
+                         f"{CEM_HISTORY} (JEPA.rollout): the planners would be scored by different costs")
+    return wm
+
+
 @torch.no_grad()
 def encode(wm, pixels):
     """Frozen LeWM embedding of a batch of frames. pixels: (B, C, H, W) -> (B, D)."""

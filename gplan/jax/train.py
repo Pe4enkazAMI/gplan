@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import optax
 import wandb
 
-from gplan.jax.losses import tb_loss, vargrad_loss
+from gplan.jax.losses import tb_loss
 from gplan.jax.mala import mala
 from gplan.jax.policy import rollout
 
@@ -19,7 +19,6 @@ from gplan.jax.policy import rollout
 @dataclass(frozen=True)
 class TrainConfig:
     """Static settings of the train step (changing one recompiles it)."""
-    loss_type: str = "tb"        # "tb" (learned log Z) or "vargrad" (in-batch log Z, needs n_samples >= 2)
     n_samples: int = 1           # K plans per (start, goal); the effective batch is B * K
     action_dim: int = 1          # world-model action dim per plan step (frameskip * env action dim)
     reference_var: float = 1.0   # s^2 of the N(0, s^2 I) reference measure
@@ -39,9 +38,10 @@ def adapt_step_size(step_size, accept_rate, target):
     return step_size * math.exp(accept_rate - target) if target > 0 else step_size
 
 
-# One seed, independent random streams: weight initialization and everything sampled in training
-# (plans, MALA). Deriving both from the same raw key would correlate them.
-INIT_STREAM, TRAIN_STREAM = 0, 1
+# One seed, independent random streams: the policy's initial weights, the on-policy plans, the PPO
+# critic's initial weights (gplan.jax.ppo) and MALA's proposals and accept decisions. Drawing two of
+# them from the same key would correlate them.
+INIT_STREAM, TRAIN_STREAM, CRITIC_STREAM, MALA_STREAM = 0, 1, 2, 3
 
 
 def init_key(seed):
@@ -93,10 +93,9 @@ def make_train_step(optimizer, cfg: TrainConfig):
 
     `cost_model` is anything with `.cost(z_start, z_goal, plans) -> (N,)`, e.g. `LeWMPredictor`.
     """
-    loss_fn = tb_loss if cfg.loss_type == "tb" else partial(vargrad_loss, n_samples=cfg.n_samples)
-
     @eqx.filter_jit
-    def train_step(model, opt_state, cost_model, key, z_start, z_goal, beta, ls_step_size, local_search=False):
+    def train_step(model, opt_state, cost_model, key, ls_key, z_start, z_goal, beta, ls_step_size,
+                   local_search=False):
         z_start = jnp.repeat(z_start, cfg.n_samples, axis=0)  # rows i*K .. i*K+K-1 share condition i
         z_goal = jnp.repeat(z_goal, cfg.n_samples, axis=0)
         n = z_start.shape[0]
@@ -107,16 +106,16 @@ def make_train_step(optimizer, cfg: TrainConfig):
 
         ls_stats = {}
         if local_search:  # static: compiled once with and once without local search
-            ls_actions, ls_cost, accept = mala(cost_model, jax.random.fold_in(key, 1), z_start, z_goal, actions,
+            ls_actions, ls_cost, accept = mala(cost_model, ls_key, z_start, z_goal, actions,
                                                beta, cfg.reference_var, cfg.action_dim, cfg.ls_steps, ls_step_size)
             ls_stats = {"ls/accept": accept, "ls/cost": ls_cost.mean(), "ls/on_policy_cost": cost.mean(),
                         "ls/cost_gain": (cost - ls_cost).mean(),
                         "ls/move": jnp.sqrt(jnp.sum((ls_actions - actions) ** 2, axis=-1)).mean()}
-            # the loss then sees both halves; each keeps the "K consecutive rows = one condition" grouping
+            # the loss then sees both halves
             z_start, z_goal = jnp.concatenate([z_start, z_start]), jnp.concatenate([z_goal, z_goal])
             actions, cost = jnp.concatenate([actions, ls_actions]), jnp.concatenate([cost, ls_cost])
 
-        (loss, stats), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(
+        (loss, stats), grads = eqx.filter_value_and_grad(tb_loss, has_aux=True)(
             model, z_start, z_goal, actions, cost, beta, cfg.reference_var)
         stats.update(norm_stats(model, grads, cfg.grad_clip))
         stats.update({"actions/mean": actions.mean(), "actions/std": jnp.std(actions, ddof=1),
@@ -133,7 +132,8 @@ def make_train_step(optimizer, cfg: TrainConfig):
 def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None, seed=0, log_every=10):
     """One optimizer step per (z_start, z_goal) batch. Returns (trained model, list of losses).
 
-    `seed` drives the training samples (stream TRAIN_STREAM; initialize the model with `init_key(seed)`).
+    `seed` drives the training samples (streams TRAIN_STREAM for the on-policy plans, MALA_STREAM for
+    local search; initialize the model with `init_key(seed)`).
     `beta` is a float or a callable `step -> beta`. Every step is logged to wandb when a run is
     active; a console summary is printed every `log_every` steps. Step 0 includes compilation time.
     With local search on (cfg.ls_steps > 0) the loss and its stats cover on-policy and MALA plans
@@ -144,16 +144,19 @@ def train(model, cost_model, batches, beta, cfg: TrainConfig, lr=1e-3, lr_z=None
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     train_step = make_train_step(optimizer, cfg)
     key = jax.random.fold_in(jax.random.key(seed), TRAIN_STREAM)
+    ls_key = jax.random.fold_in(jax.random.key(seed), MALA_STREAM)
     ls_step_size = cfg.ls_step_size
 
     losses = []
     t_prev = time.perf_counter()
     for step, (z_start, z_goal) in enumerate(batches):
         key, step_key = jax.random.split(key)
+        ls_key, step_ls_key = jax.random.split(ls_key)
         beta_t = beta_fn(step)
         local_search = cfg.ls_steps > 0 and step >= cfg.ls_start and step % cfg.ls_every == 0
-        model, opt_state, loss, stats = train_step(model, opt_state, cost_model, step_key, z_start, z_goal,
-                                                   jnp.float32(beta_t), jnp.float32(ls_step_size), local_search)
+        model, opt_state, loss, stats = train_step(model, opt_state, cost_model, step_key, step_ls_key, z_start,
+                                                   z_goal, jnp.float32(beta_t), jnp.float32(ls_step_size),
+                                                   local_search)
         stats = {k: float(v) for k, v in jax.device_get(stats).items()}  # one host transfer per step
         losses.append(float(loss))
         if local_search:

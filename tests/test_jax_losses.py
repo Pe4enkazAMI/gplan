@@ -8,7 +8,7 @@ import torch
 from conftest import A, B, D, T
 
 from gplan.jax.convert import gplaner_from_torch, gplaner_to_torch
-from gplan.jax.losses import tb_loss, vargrad_loss
+from gplan.jax.losses import tb_loss
 from gplan.torch.policy import GPlaner as TorchGPlaner
 from gplan.torch.policy import Sampler
 
@@ -46,23 +46,6 @@ def test_tb_loss_and_grads_match_torch(setup):
     ref.backward()
 
     (loss, _), grads = eqx.filter_value_and_grad(tb_loss, has_aux=True)(jax_model, *jargs, BETA, REF_VAR)
-    np.testing.assert_allclose(float(loss), ref.item(), rtol=1e-5)
-    assert_grads_match(grads, torch_model)
-
-
-def test_vargrad_loss_and_grads_match_torch(setup):
-    torch_model, jax_model, (zs, zg, plans, cost), jargs = setup
-    K = 2  # B = 4 rows = 2 conditions x 2 plans; repeat conditions so the grouping is real
-    zs, zg = zs[::K].repeat_interleave(K, 0), zg[::K].repeat_interleave(K, 0)
-    jargs = (jnp.asarray(zs.numpy()), jnp.asarray(zg.numpy())) + jargs[2:]
-
-    sampler = Sampler(torch_model, reference_var=REF_VAR)
-    xi_bk = torch_xi(sampler, zs, zg, plans, cost).view(-1, K)
-    log_z_hat = -xi_bk.mean(1).detach()
-    ref = xi_bk.var(1).mean() + (torch_model.log_Z(zs, zg).view(-1, K)[:, 0] - log_z_hat).pow(2).mean()
-    ref.backward()
-
-    (loss, _), grads = eqx.filter_value_and_grad(vargrad_loss, has_aux=True)(jax_model, *jargs, BETA, REF_VAR, K)
     np.testing.assert_allclose(float(loss), ref.item(), rtol=1e-5)
     assert_grads_match(grads, torch_model)
 
