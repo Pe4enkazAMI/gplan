@@ -16,7 +16,7 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import make_wm, REPO, script_env
+from conftest import make_wm, REPO, save_as_swm, script_env
 
 swm = pytest.importorskip("stable_worldmodel")
 from gplan.data import episode_column, split_episodes  # noqa: E402
@@ -40,13 +40,15 @@ def record(env_name, dataset, home, episodes=6, steps=60, **world_kwargs):
 
 @pytest.fixture(scope="session")
 def home(tmp_path_factory):
-    """A STABLEWM_HOME with toy datasets, a tiny LeWM checkpoint and two GFlow checkpoints."""
+    """A STABLEWM_HOME with toy datasets, a tiny LeWM checkpoint (also saved as stable-worldmodel saves a PLDM:
+    toy/pldm_object.ckpt, the same weights) and GFlow checkpoints."""
     home = tmp_path_factory.mktemp("stablewm_home")
     record("swm/TwoRoom-v1", "toy_tworoom", home)
     record("swm/PushT-v1", "toy_pusht", home, episodes=4)
     (home / "toy").mkdir()
-    torch.save(make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16, action_dim=ACTION_DIM),
-               home / "toy" / "lewm_object.ckpt")
+    wm = make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16, action_dim=ACTION_DIM)
+    torch.save(wm, home / "toy" / "lewm_object.ckpt")
+    save_as_swm(wm, home / "toy" / "pldm_object.ckpt")
     for name, seed, n_components in (("gauss", 1, 1), ("mixture", 2, 3)):
         torch.manual_seed(seed)
         kwargs = dict(state_dim=EMBED, horizon=5 * ACTION_DIM, action_dim=ACTION_DIM, n_components=n_components)
@@ -119,6 +121,16 @@ def test_every_policy_is_reproducible(home, tmp_path):
         assert np.isclose((m["plan_cost_replan0"] + m["plan_cost_replan1"]) / 2, m["plan_cost"])
         assert m["plan_cost_first"] == m["plan_cost_replan0"]
         assert 0 < m["action_absmax"] <= m["action_absmax_max"]
+
+
+def test_a_pldm_checkpoint_evaluates_like_lewm_with_the_same_weights(home, tmp_path):
+    """wm=toy/pldm: CEM plans through JEPA.get_cost, GFlow ranks and refines through lewm_cost, as with the
+    LeWM checkpoint holding the same weights, so every result is the same."""
+    args = ("policy=[gflow,gflow-refine,cem]", f"planner={home / 'mixture.pt'}", "refine_steps=2", "cem_steps=3")
+    lewm, pldm = evaluate(home, tmp_path, *args), evaluate(home, tmp_path, *args, wm="toy/pldm")
+    assert list(pldm) == ["gflow", "gflow-refine", "cem"]
+    for name in lewm:
+        assert outcome(lewm[name]) == outcome(pldm[name]), name
 
 
 def test_pusht_resets_from_the_full_state(home, tmp_path):

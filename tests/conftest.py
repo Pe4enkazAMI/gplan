@@ -13,7 +13,10 @@ if os.environ.get("GPLAN_TESTS_ON_GPU") != "1":
     os.environ["CUDA_VISIBLE_DEVICES"] = ""  # PyTorch: no CUDA context either
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
+import copy  # noqa: E402
 import importlib.util  # noqa: E402
+import sys  # noqa: E402
+import types  # noqa: E402
 from pathlib import Path  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 
@@ -136,3 +139,35 @@ def make_wm(embed, depth, heads, dim_head, mlp_dim, proj_hidden, action_dim):
         projector=MLP(embed, proj_hidden, embed, norm_fn=nn.BatchNorm1d),
         pred_proj=MLP(embed, proj_hidden, embed, norm_fn=nn.BatchNorm1d),
     ))
+
+
+def save_as_swm(wm, path, family="pldm"):
+    """Save the le-wm model `wm` as stable-worldmodel saves a world model of this architecture: every class
+    under stable_worldmodel.wm.<family> (`PLDM` / `LeWM` in .<family>, the modules in .module, `ARPredictor`
+    named `Predictor`). The stand-in modules exist only while pickling, so loading must not need them (nor
+    any stable-worldmodel version). Returns `path`."""
+    pkg = f"stable_worldmodel.wm.{family}"
+    stand_ins = {name: types.ModuleType(name) for name in
+                 ("stable_worldmodel", "stable_worldmodel.wm", pkg, f"{pkg}.{family}", f"{pkg}.module")}
+    renamed = {"JEPA": {"pldm": "PLDM", "lewm": "LeWM"}[family], "ARPredictor": "Predictor"}
+    wm, classes = copy.deepcopy(wm), {}
+    for m in wm.modules():
+        cls = type(m)
+        if cls.__module__ in ("jepa", "module"):
+            if cls not in classes:
+                name = renamed.get(cls.__name__, cls.__name__)
+                home = stand_ins[f"{pkg}.{family}" if cls.__name__ == "JEPA" else f"{pkg}.module"]
+                classes[cls] = type(name, (cls,), {"__module__": home.__name__, "__qualname__": name})
+                setattr(home, name, classes[cls])
+            m.__class__ = classes[cls]
+    saved = {name: sys.modules.get(name) for name in stand_ins}
+    sys.modules.update(stand_ins)
+    try:
+        torch.save(wm, path)
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                del sys.modules[name]
+            else:
+                sys.modules[name] = module
+    return path

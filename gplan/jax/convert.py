@@ -1,6 +1,6 @@
 """Weight conversion between PyTorch and Equinox.
 
-    lewm_from_torch(wm)          trained PyTorch LeWM (jepa.JEPA)  -> LeWMPredictor (JAX)
+    lewm_from_torch(wm)          trained PyTorch LeWM / PLDM (jepa.JEPA)  -> LeWMPredictor (JAX)
     gplanner_from_torch(model)    PyTorch gplan.torch.policy.GPlanner      -> gplan.jax.policy.GPlanner
     gplanner_to_torch(model)      gplan.jax.policy.GPlanner          -> PyTorch state_dict (same keys as gplan.torch.policy.GPlanner)
 
@@ -67,7 +67,8 @@ def _block(b) -> jl.ConditionalBlock:
 
 
 def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
-    """Convert the planning part of a trained PyTorch LeWM (`jepa.JEPA`, eval mode) to Equinox.
+    """Convert the planning part of a trained PyTorch world model of the LeWM architecture (`jepa.JEPA`, eval
+    mode: LeWM or PLDM) to Equinox.
 
     `history_size` defaults to the predictor's context length (its number of position embeddings, 3 for LeWM),
     as `gplan.torch.lewm.history_length` does on the PyTorch side."""
@@ -97,9 +98,10 @@ def lewm_from_torch(wm, history_size=None) -> jl.LeWMPredictor:
 
 
 def load_lewm_predictor(ckpt_path):
-    """Load a PyTorch LeWM `*_object.ckpt` on CPU and return its predictor as an Equinox module."""
-    from gplan.torch.lewm import check_history, load_lewm  # puts le-wm on sys.path, needed to unpickle
-    return lewm_from_torch(check_history(load_lewm(ckpt_path, "cpu")))
+    """Load a world-model `*_object.ckpt` of the LeWM architecture (LeWM, PLDM; `gplan.torch.lewm.load_wm`)
+    on CPU and return its predictor as an Equinox module."""
+    from gplan.torch.lewm import check_history, load_wm  # puts le-wm on sys.path, needed to unpickle
+    return lewm_from_torch(check_history(load_wm(ckpt_path, "cpu")))
 
 
 # ----------------------------------------------------------------------------- GPlanner

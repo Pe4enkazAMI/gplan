@@ -206,7 +206,7 @@ def test_convert_lewm_builds_a_jepa_from_an_hf_config(tmp_path):
                      f"wm = m['build_lewm'](json.loads({json.dumps(json.dumps(config))})); "
                      "wm.load_state_dict(wm.state_dict(), strict=True); "
                      f"torch.save(wm.eval(), {str(tmp_path / 'x_object.ckpt')!r}); "
-                     "from gplan.torch.lewm import encode, load_lewm; "
-                     f"wm = load_lewm({str(tmp_path / 'x_object.ckpt')!r}); "
+                     "from gplan.torch.lewm import encode, load_wm; "
+                     f"wm = load_wm({str(tmp_path / 'x_object.ckpt')!r}); "
                      "print(tuple(encode(wm, torch.randn(2, 3, 8, 8)).shape))"])
     assert out.strip().endswith("(2, 192)")

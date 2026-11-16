@@ -53,7 +53,7 @@ from gplan.torch.evaluation import (
     TASKS,
     use_deterministic_algorithms,
 )
-from gplan.torch.lewm import check_history, embed_dim
+from gplan.torch.lewm import check_history, embed_dim, load_wm, STABLEWM_HOME
 from gplan.torch.policy import load_planner
 
 
@@ -126,8 +126,7 @@ def main():
     # -- shared frozen world model and (optionally) the trained planner
     wm = planner = refine = train_args = None
     if any(name != "random" for name in args.policy):
-        wm = check_history(swm.policy.AutoCostModel(args.wm).to(args.device))
-        wm.eval().requires_grad_(False)
+        wm = check_history(load_wm(STABLEWM_HOME / f"{args.wm}_object.ckpt", args.device))
     if any(name.startswith("gflow") for name in args.policy):
         planner, train_args = load_planner(args.planner, args.device)
         if train_args is not None:

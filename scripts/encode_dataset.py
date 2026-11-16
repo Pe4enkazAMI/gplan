@@ -1,4 +1,4 @@
-"""Precompute frozen LeWM embeddings for a dataset (run once per dataset / LeWM checkpoint).
+"""Precompute frozen world-model embeddings for a dataset (run once per dataset / world-model checkpoint).
 
     python scripts/encode_dataset.py --dataset tworoom
     -> $STABLEWM_HOME/tworoom_latents.npy, tworoom_latents_meta.npz, tworoom_latents.json
@@ -11,14 +11,15 @@ from pathlib import Path
 
 import torch
 
-from gplan.torch.lewm import load_lewm, STABLEWM_HOME
+from gplan.torch.lewm import load_wm, STABLEWM_HOME
 from gplan.torch.precompute import cache_info, encode_dataset
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dataset", default="tworoom", help=".h5 name under $STABLEWM_HOME")
-    p.add_argument("--ckpt", type=Path, default=STABLEWM_HOME / "tworoom/lewm_object.ckpt", help="LeWM *_object.ckpt")
+    p.add_argument("--ckpt", type=Path, default=STABLEWM_HOME / "tworoom/lewm_object.ckpt",
+                   help="world model <name>_object.ckpt (LeWM or PLDM)")
     p.add_argument("--out", type=Path, default=None, help="output prefix (default: $STABLEWM_HOME/<dataset>_latents)")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--img-size", type=int, default=224)
@@ -28,7 +29,7 @@ def main():
 
     h5_path = STABLEWM_HOME / f"{args.dataset}.h5"
     out = args.out or STABLEWM_HOME / f"{args.dataset}_latents"
-    wm = load_lewm(args.ckpt, args.device)
+    wm = load_wm(args.ckpt, args.device)
     info = cache_info(args.ckpt, h5_path, args.img_size)
     encode_dataset(wm, h5_path, out, info, args.batch_size, args.img_size, args.dtype, args.device)
     print(f"wrote {out}.npy, {out}_meta.npz, {out}.json")
