@@ -19,7 +19,8 @@ Every policy has its own settings, so CEM always runs the LeWM paper configurati
 | `refine_steps / refine_lr / refine_objective / refine_beta` | `gflow-refine` / `prior-refine`: Adam steps on the actions through LeWM before picking the cheapest, on βJ + ‖A‖²/2 (`target`; β defaults to the planner's) or on J (`cost`) |
 | `prior_samples=N` (64) `prior_var` (1) | `prior`: best-of-N random shooting from N(0, s² I); `prior-refine`: the same plans refined like `gflow-refine` (the control for it) |
 | `holdout_frac=f split_seed=s` | draw episodes only from the episodes `train.py` held out with the same settings; a planner that trained on them is refused (default 0: every episode, the LeWM protocol) |
-| `allow_mismatch=true` | evaluate a planner trained on another dataset, LeWM checkpoint, goal offset or plan layout (an error otherwise) |
+| `wm=<name>` | the world model that plans and scores: the task's `lewm` (default) or `pldm`, or a checkpoint name `<folder>/<name>` under `$STABLEWM_HOME` |
+| `allow_mismatch=true` | evaluate a planner trained on another dataset, world-model checkpoint, goal offset or plan layout (an error otherwise) |
 | `label=NAME` | name of the planner config in the results file; `aggregate_results.py` pools runs with the same label |
 | `goal_offset=25 eval_budget=50 num_eval=50 seed=42` | the LeWM protocol |
 | `results_json=PATH` | every policy's metrics and per-episode successes, for sweeps over seeds |

@@ -1,8 +1,9 @@
-"""The paper's experiments for one task: train every model and ablation, evaluate them, build the tables.
-Settings: configs/run.yaml, with the task (configs/task), the models (configs/model) and the evaluations
-(configs/eval); Hydra overrides on the command line.
+"""The paper's experiments for one task and world model: train every model and ablation, evaluate them,
+build the tables. Settings: configs/run.yaml, with the task (configs/task), the world model (wm), the models
+(configs/model) and the evaluations (configs/eval); Hydra overrides on the command line.
 
     python scripts/run.py task=pusht                    # train, evaluate, tables
+    python scripts/run.py task=pusht wm=pldm            # the same with PLDM -> outputs/pusht-pldm, results/pusht-pldm
     python scripts/run.py task=pusht stage=eval         # one stage: train, eval or tables
     python scripts/run.py task=pusht "only=[ppo,ppo-maxent,ppo-cost,ppo-cost-maxent]"   # only these models
     python scripts/run.py task=pusht "seeds=[0]" "eval_overrides={device:cuda}"
@@ -29,7 +30,7 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from gplan.config import compose_config, script_overrides
-from gplan.data import STABLEWM_HOME
+from gplan.data import run_tag, STABLEWM_HOME
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -59,9 +60,10 @@ def train_runs(cfg, task_overrides):
     runs = [(m, s, [f"model={m}"]) for s in cfg.seeds for m in cfg.models]
     if cfg.ablations:
         runs += [(name, s, list(overrides)) for name, overrides in cfg.task.ablations.items() for s in cfg.ablation_seeds]
-    task = cfg.task.name
+    name = f"{cfg.task.name}{run_tag(cfg.wm)}"  # wandb: tworoom-gfn-s0, tworoom-pldm-gfn-s0
     return [(f"{cfg.out}/{label}-s{seed}", [
-        *task_overrides, *model, f"seed={seed}", f"out={cfg.out}/{label}-s{seed}", f"wandb_name={task}-{label}-s{seed}",
+        *task_overrides, f"wm={cfg.wm}", *model, f"seed={seed}", f"out={cfg.out}/{label}-s{seed}",
+        f"wandb_name={name}-{label}-s{seed}",
         f"holdout_frac={cfg.holdout_frac}", f"split_seed={cfg.split_seed}", f"wandb_mode={cfg.wandb_mode}",
         *as_overrides(cfg.train_overrides)]) for label, seed, model in runs if wanted(cfg, label)]
 
@@ -69,8 +71,8 @@ def train_runs(cfg, task_overrides):
 def eval_runs(cfg):
     """(results .json, evaluate.py overrides) of every evaluation run, in order. Later overrides of a
     setting win (e.g. a run's refine_steps over its refine objective's)."""
-    base = [f"task={cfg.task.name}", f"dataset={cfg.task.dataset}", f"wm={cfg.task.wm}", f"num_eval={cfg.num_eval}",
-            f"wandb_mode={cfg.wandb_mode}", *as_overrides(cfg.eval_overrides)]
+    base = [f"task={cfg.task.name}", f"dataset={cfg.task.dataset}", f"wm={cfg.task.name}/{cfg.wm}",
+            f"num_eval={cfg.num_eval}", f"wandb_mode={cfg.wandb_mode}", *as_overrides(cfg.eval_overrides)]
     runs = []
     for evaluation in cfg.evals.values():
         if not evaluation.get("enabled", True):

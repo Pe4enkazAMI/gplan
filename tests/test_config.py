@@ -60,16 +60,24 @@ def test_settings_are_typed_and_checked():
 def test_models_take_the_tasks_settings(task, model, expected):
     args = train_args(f"task={task}", f"model={model}")
     assert {k: args[k] for k in expected} == expected
-    wm = compose_config("train", [f"task={task}"]).task.wm
-    assert args["ckpt"] == STABLEWM_HOME / f"{wm}_object.ckpt"
+    assert args["ckpt"] == STABLEWM_HOME / f"{task}/lewm_object.ckpt" and args["latents"] is None  # LeWM's
+
+
+def test_world_model_picks_the_checkpoint():
+    """wm=pldm: the task's PLDM checkpoint; nothing else changes, and wm itself is not a recorded setting
+    (the checkpoint is)."""
+    lewm, pldm = train_args("task=cube", "model=gfn"), train_args("task=cube", "model=gfn", "wm=pldm")
+    assert pldm["ckpt"] == STABLEWM_HOME / "cube/pldm_object.ckpt" and "wm" not in pldm
+    assert {k: v for k, v in pldm.items() if k != "ckpt"} == {k: v for k, v in lewm.items() if k != "ckpt"}
 
 
 def test_task_configs_match_the_evaluation_presets():
     pytest.importorskip("stable_worldmodel")
     from gplan.torch.evaluation import TASKS
     for name, preset in TASKS.items():
-        task = compose_config("train", [f"task={name}"]).task
-        assert (task.name, task.dataset, task.wm) == (name, preset.dataset, preset.wm)
+        cfg = compose_config("train", [f"task={name}"])
+        assert (cfg.task.name, cfg.task.dataset) == (name, preset.dataset)
+        assert Path(cfg.ckpt) == STABLEWM_HOME / f"{preset.wm}_object.ckpt"  # the evaluation's default world model
 
 
 def runner_cfg(*overrides):
@@ -83,7 +91,7 @@ def test_runner_trains_every_model_and_ablation():
     assert outs[:6] == [f"outputs/pusht/{m}-s0" for m in ("gfn", "gfn-mala", "bc", "map", "ppo", "ppo-maxent")]
     assert len(outs) == 12 + 6 and outs[-1] == "outputs/pusht/ppo-cost-maxent-s3"
     out, overrides = runs[-1]
-    assert overrides == ["task=pusht", "model=ppo", "ppo_reward=cost", "ent_coef=1", "seed=3", f"out={out}",
+    assert overrides == ["task=pusht", "wm=lewm", "model=ppo", "ppo_reward=cost", "ent_coef=1", "seed=3", f"out={out}",
                          "wandb_name=pusht-ppo-cost-maxent-s3", "holdout_frac=0.1", "split_seed=0", "wandb_mode=online"]
     assert len(runner.train_runs(runner_cfg("ablations=false"), [])) == 3 * 6
 
@@ -126,3 +134,37 @@ def test_runner_passes_extra_settings_to_every_run():
     assert all(overrides[-1] == "log_every=100" for _, overrides in runner.train_runs(cfg, []))
     for _, overrides in runner.eval_runs(cfg):
         assert overrides[5:7] == ["device=cuda", "deterministic=true"]  # after the task's settings, before the run's
+
+
+def test_runner_with_another_world_model():
+    """wm=pldm: every run trains and evaluates against the task's PLDM, into outputs/<task>-pldm and
+    results/<task>-pldm, under wandb names that say so; the default (LeWM) keeps the untagged names."""
+    runner = load_script("run")
+    cfg = runner_cfg("task=reacher", "wm=pldm", "seeds=[0]", "eval_seeds=[42]", "ablation_seeds=[0]")
+    assert (cfg.out, cfg.results) == ("outputs/reacher-pldm", "results/reacher-pldm")
+    train = dict(runner.train_runs(cfg, ["task=reacher"]))
+    assert train["outputs/reacher-pldm/gfn-s0"][:3] == ["task=reacher", "wm=pldm", "model=gfn"]
+    assert "wandb_name=reacher-pldm-gfn-s0" in train["outputs/reacher-pldm/gfn-s0"]
+    evals = dict(runner.eval_runs(cfg))
+    assert evals and all(p.startswith("results/reacher-pldm/") for p in evals)
+    assert all("wm=reacher/pldm" in o and not any(x.startswith("planner=outputs/reacher/") for x in o)
+               for o in evals.values())
+    lewm = runner_cfg("task=reacher")
+    assert (lewm.out, lewm.results) == ("outputs/reacher", "results/reacher")
+
+
+def test_world_model_names():
+    from gplan.data import default_latents, run_tag, wm_name
+    assert wm_name("/h/pusht/pldm_object.ckpt") == "pldm" and wm_name("pusht/lewm_object.ckpt") == "lewm"
+    assert default_latents("tworoom", "/h/tworoom/lewm_object.ckpt") == STABLEWM_HOME / "tworoom_latents"
+    assert default_latents("dmc/reacher_random", "/h/reacher/pldm_object.ckpt") == \
+        STABLEWM_HOME / "dmc/reacher_random_pldm_latents"
+    assert (run_tag("lewm"), run_tag("pldm")) == ("", "-pldm")
+
+
+def test_evaluate_takes_a_world_models_name_or_its_checkpoint_name():
+    pytest.importorskip("stable_worldmodel")
+    evaluate = load_script("evaluate")
+    assert evaluate.parse_args(["task=pusht"])[0].wm == "pusht/lewm"  # the task's LeWM
+    assert evaluate.parse_args(["task=pusht", "wm=pldm"])[0].wm == "pusht/pldm"
+    assert evaluate.parse_args(["task=pusht", "wm=toy/lewm"])[0].wm == "toy/lewm"

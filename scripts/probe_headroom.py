@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from gplan.data import split_episodes, STABLEWM_HOME
+from gplan.data import default_latents, split_episodes
 from gplan.jax import checkpoint
 from gplan.jax.convert import load_lewm_predictor
 from gplan.jax.latents import expert_plans, LatentPairs, lewm_action_stats
@@ -76,7 +76,7 @@ def main():
 
     ckpt = args.ckpt or Path(train_args["ckpt"])
     latents = args.latents or (Path(train_args["latents"]) if train_args.get("latents")
-                               else STABLEWM_HOME / f"{train_args['dataset']}_latents")
+                               else default_latents(train_args["dataset"], ckpt))
     goal_offset = args.goal_offset or train_args.get("goal_offset", 25)
     plan_shape = (train_args.get("n_steps", 5), train_args.get("action_dim", 10))
     reference_var = train_args.get("ref_var", 1.0)

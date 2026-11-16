@@ -67,11 +67,12 @@ git clone --recurse-submodules https://github.com/Pe4enkazAMI/gplan.git
 cd gplan                                   # existing clone: git submodule update --init le-wm
 pip install -e ".[eval,convert,test,jax-cuda]"   # on a CPU-only / macOS machine: .[...,jax]
 pip install -e ".[mujoco]"                        # Reacher and Cube (MuJoCo, DMControl, OGBench)
-export STABLEWM_HOME=~/.stable_worldmodel  # datasets (*.h5), LeWM checkpoints and latents live here
+export STABLEWM_HOME=~/.stable_worldmodel  # datasets (*.h5), world-model checkpoints and latents live here
 ```
 
 `le-wm` is a git submodule. Its `jepa.py` and `module.py` must be importable under those names
-because LeWM checkpoints are pickled `jepa.JEPA` objects; importing `gplan.torch.lewm` handles that.
+because LeWM checkpoints are pickled `jepa.JEPA` objects (and PLDM checkpoints are loaded into those
+classes); importing `gplan.torch.lewm` handles that.
 
 Reacher and Cube are MuJoCo envs, rendered offscreen. On Linux evaluation sets `MUJOCO_GL=egl`
 (as `le-wm/eval.py` does), which needs the NVIDIA EGL driver (present on a GPU machine); set
@@ -99,9 +100,10 @@ sets it for the processes it starts.
 
 `train.py`, `evaluate.py` and `run.py` take [Hydra](https://hydra.cc) overrides, `name=value`. Every
 setting, its type and default is in `gplan/config.py` (`TrainArgs`, `EvalArgs`); `configs/` composes
-them: `task=<name>` picks `configs/task/<name>.yaml` (dataset, LeWM checkpoint and the paper's
-settings for the task) and, for training, `model=<name>` a training method with those settings
-(`configs/model`). Lists are written `"policy=[gflow,cem]"` (quoted for the shell). `--help` prints a
+them: `task=<name>` picks `configs/task/<name>.yaml` (dataset and the paper's settings for the task),
+`wm=<name>` the world model (`lewm`, the default, or `pldm`: the checkpoint
+`$STABLEWM_HOME/<task>/<name>_object.ckpt`) and, for training, `model=<name>` a training method with those
+settings (`configs/model`). Lists are written `"policy=[gflow,cem]"` (quoted for the shell). `--help` prints a
 script's settings as composed with the given overrides:
 
 ```bash
@@ -168,6 +170,36 @@ python scripts/evaluate.py task=cube "policy=[cem]" num_eval=2
 `train.py` reads the plan-step size from the data (`frameskip` 5 x the dataset's action dim) and
 stops if LeWM's action encoder expects another size. Reacher starts from TwoRoom's GFlowNet
 settings and Cube from PushT's (`configs/task`).
+
+### Another world model: PLDM
+
+PLDM as stable-worldmodel implements it has LeWM's architecture (ViT-tiny encoder, CLS token and
+projector, the same AdaLN predictor with a context of 3, the same planning cost); only its training loss
+differs (VICReg-style variance / covariance terms instead of SIGReg). So it runs through the same code:
+`wm=pldm` in `train.py`, `evaluate.py` and `run.py` picks `$STABLEWM_HOME/<task>/pldm_object.ckpt`.
+The le-wm README links the baseline checkpoints (Google Drive, `<name>_object.ckpt`); put each task's
+PLDM there. They are pickled with stable-worldmodel's own copies of the classes, which
+`gplan.torch.lewm.load_wm` loads into the le-wm classes, so no particular stable-worldmodel version is
+needed; a checkpoint of another architecture is refused.
+
+Files made with PLDM carry its name; LeWM's keep theirs:
+
+| | LeWM | PLDM |
+| --- | --- | --- |
+| latents (`encode_dataset.py`, `train.py`) | `<dataset>_latents` | `<dataset>_pldm_latents` |
+| `run.py` checkpoints and results | `outputs/<task>`, `results/<task>` | `outputs/<task>-pldm`, `results/<task>-pldm` |
+| `run.py` wandb run names | `<task>-<model>-s<seed>` | `<task>-pldm-<model>-s<seed>` |
+
+```bash
+python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/pldm_object.ckpt
+python scripts/train.py task=pusht wm=pldm model=gfn out=outputs/pusht-pldm/gfn-s0
+python scripts/evaluate.py task=pusht wm=pldm "policy=[gflow,cem]" planner=outputs/pusht-pldm/gfn-s0.pt
+python scripts/run.py task=pusht wm=pldm     # the paper's runs with PLDM
+```
+
+Training and evaluation check that latents and planners belong to the world model they are used with
+(the checkpoint each was made with). β is per embedding dim, as for LeWM (both 192-d); the tasks' β
+values were chosen for LeWM's cost scale.
 
 ### More experiments
 

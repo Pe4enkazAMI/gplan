@@ -68,6 +68,8 @@ def parse_args(argv=None):
     args.device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     task = TASKS[args.task]
     args.wm = args.wm or task.wm
+    if "/" not in args.wm:  # wm=pldm: that world model of the task, as in train.py / run.py
+        args.wm = f"{args.task}/{args.wm}"
     args.dataset = args.dataset or task.dataset
     args.env = args.env or task.env
     return args, task

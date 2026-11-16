@@ -7,6 +7,29 @@ import numpy as np
 
 STABLEWM_HOME = Path(os.getenv("STABLEWM_HOME", "~/.stable_worldmodel")).expanduser()
 
+# World models (gplan.torch.lewm.load_wm): a task's checkpoint is $STABLEWM_HOME/<task>/<name>_object.ckpt,
+# <name> = lewm or pldm. LeWM keeps the file names it had before there were other world models; files
+# made with any other world model carry its name.
+DEFAULT_WM = "lewm"
+
+
+def wm_name(ckpt):
+    """The world model of a checkpoint .../<name>_object.ckpt: <name>."""
+    return Path(ckpt).name.removesuffix("_object.ckpt")
+
+
+def default_latents(dataset, ckpt):
+    """Prefix of `dataset`'s latents encoded by the world model `ckpt`: $STABLEWM_HOME/<dataset>_latents for
+    LeWM, $STABLEWM_HOME/<dataset>_<name>_latents for another world model <name>."""
+    name = wm_name(ckpt)
+    return STABLEWM_HOME / (f"{dataset}_latents" if name == DEFAULT_WM else f"{dataset}_{name}_latents")
+
+
+def run_tag(wm):
+    """Suffix of the output and results folders of runs with world model `wm` (scripts/run.py): none for
+    LeWM, -<wm> otherwise (outputs/pusht, outputs/pusht-pldm)."""
+    return "" if wm == DEFAULT_WM else f"-{wm}"
+
 
 def episode_column(names):
     """Name of the episode-index column; datasets use either spelling."""

@@ -10,7 +10,7 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import IMG, make_wm, REPO, script_env
+from conftest import IMG, make_wm, REPO, save_as_swm, script_env
 
 from gplan.torch.policy import load_planner
 
@@ -32,13 +32,16 @@ def script(name):
 
 @pytest.fixture(scope="session")
 def home(tmp_path_factory):
-    """$STABLEWM_HOME with a raw toy dataset (3 episodes of 40 frames) and a tiny LeWM checkpoint."""
+    """$STABLEWM_HOME with a raw toy dataset (3 episodes of 40 frames) and a tiny LeWM checkpoint, also where
+    scripts/run.py task=tworoom looks for it (tworoom/lewm_object.ckpt, a link)."""
     home = tmp_path_factory.mktemp("stablewm_home")
     write_toy_dataset(home / "toy.h5", ENV_ACTION_DIM)
     (home / "toy").mkdir()
     wm = make_wm(embed=EMBED, depth=1, heads=2, dim_head=8, mlp_dim=32, proj_hidden=16,
                  action_dim=ENV_ACTION_DIM * FRAMESKIP)
     torch.save(wm, home / "toy" / "lewm_object.ckpt")
+    (home / "tworoom").mkdir()
+    (home / "tworoom" / "lewm_object.ckpt").symlink_to(home / "toy" / "lewm_object.ckpt")
     return home
 
 
@@ -124,17 +127,48 @@ def test_train_refuses_a_plan_step_the_lewm_cannot_read(home, cube_like, tmp_pat
 def test_run_trains_each_model_once_and_saves_its_config(home, latents, tmp_path):
     """scripts/run.py stage=train on the toy data: one tiny gfn run with its composed config next to the
     checkpoint; a second call skips it."""
-    overrides = ["stage=train", "task.dataset=toy", "task.wm=toy/lewm", "task.gfn.n_batches=2", "models=[gfn]",
+    overrides = ["stage=train", "task.dataset=toy", "task.gfn.n_batches=2", "models=[gfn]",
                  "seeds=[0]", "ablations=false", "holdout_frac=0.34", "wandb_mode=disabled", f"out={tmp_path}",
                  "train_overrides={batch_size:4,n_samples:2}"]
     first = run([script("run.py"), *overrides], home)
     assert f"=== train {tmp_path}/gfn-s0" in first and (tmp_path / "gfn-s0.pt").exists()
     config = (tmp_path / "gfn-s0.yaml").read_text()
-    assert config.startswith("# overrides: task.dataset=toy task.wm=toy/lewm task.gfn.n_batches=2 model=gfn seed=0")
+    assert config.startswith("# overrides: task.dataset=toy task.gfn.n_batches=2 wm=lewm model=gfn seed=0")
     assert "n_batches: 2\n" in config and "batch_size: 4\n" in config and "dataset: toy\n" in config
     meta = json.loads((tmp_path / "gfn-s0.json").read_text())["train_args"]
     assert (meta["method"], meta["n_batches"], meta["beta"], meta["wandb_name"]) == ("gfn", 2, 90.0, "tworoom-gfn-s0")
     assert f"skip {tmp_path}/gfn-s0 (exists)" in run([script("run.py"), *overrides], home)
+
+
+@pytest.fixture(scope="session")
+def pldm(home, latents):
+    """The toy LeWM saved as stable-worldmodel saves a PLDM (toy/pldm_object.ckpt: the same weights), and its
+    latents, encoded under the default PLDM name toy_pldm_latents. Returns the checkpoint path."""
+    wm = torch.load(home / "toy" / "lewm_object.ckpt", weights_only=False)
+    ckpt = save_as_swm(wm, home / "toy" / "pldm_object.ckpt")
+    run([script("encode_dataset.py"), "--dataset", "toy", "--ckpt", str(ckpt), "--img-size", str(IMG),
+         "--batch-size", "32", "--device", "cpu"], home)
+    return ckpt
+
+
+def test_a_pldm_checkpoint_trains_like_lewm_with_the_same_weights(home, latents, pldm, tmp_path):
+    """Latents and training through a PLDM checkpoint: its own files, and the same numbers as LeWM gives when
+    the weights are the same (deterministic training, step logs and weights compared exactly)."""
+    np.testing.assert_array_equal(np.load(home / "toy_pldm_latents.npy"), np.load(f"{latents}.npy"))
+    assert Path(json.loads((home / "toy_pldm_latents.json").read_text())["ckpt"]) == pldm.resolve()
+    logs = {}
+    for name in ("lewm", "pldm"):
+        out = run([script("train.py"), "dataset=toy", f"ckpt={home / 'toy' / f'{name}_object.ckpt'}", "n_components=2",
+                   "ls_steps=2", "ls_every=2", "n_batches=4", "batch_size=4", "n_samples=2", "beta=1", "log_every=1",
+                   "wandb_mode=disabled", f"out={tmp_path / name}"], home)
+        logs[name] = [line for line in out.splitlines() if line.startswith("step")]
+    assert len(logs["pldm"]) == 4 and logs["pldm"] == logs["lewm"]
+    assert (tmp_path / "pldm.eqx").read_bytes() == (tmp_path / "lewm.eqx").read_bytes()
+    # PLDM with the LeWM latents: refused
+    proc = subprocess.run([sys.executable, script("train.py"), "dataset=toy", f"ckpt={pldm}", f"latents={latents}",
+                           "n_batches=1", "wandb_mode=disabled", f"out={tmp_path / 'x'}"], env=script_env(home),
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode != 0 and "re-run scripts/encode_dataset.py" in proc.stdout + proc.stderr
 
 
 def test_encode_dataset(home, latents):

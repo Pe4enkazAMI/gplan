@@ -5,9 +5,9 @@ scripts run with.
     python scripts/train.py task=pusht model=gfn-mala seed=1 out=outputs/pusht/gfn-mala-s1
     python scripts/evaluate.py task=pusht "policy=[gflow,cem]" planner=outputs/pusht/gfn-mala-s1.pt
 
-configs/train.yaml picks a task (configs/task: its dataset, LeWM checkpoint and the paper's settings)
-and optionally a model (configs/model: a training method and its settings for that task); any field
-below can then be overridden with `name=value`. Hydra is used for composition only (its compose API):
+configs/train.yaml picks a task (configs/task: its dataset and the paper's settings), a world model (wm: lewm
+or pldm, its checkpoint) and optionally a model (configs/model: a training method and its settings for that
+task); any field below can then be overridden with `name=value`. Hydra is used for composition only (its compose API):
 no output folders, no change of working directory or logging.
 """
 
@@ -20,7 +20,7 @@ from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING, OmegaConf
 
-from gplan.data import STABLEWM_HOME
+from gplan.data import run_tag, STABLEWM_HOME
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
 
@@ -29,18 +29,20 @@ CONFIGS = Path(__file__).resolve().parents[1] / "configs"
 class TrainArgs:
     """scripts/train.py. Fields [ppo] are read by method=ppo only; MALA and the beta warmup by gfn only."""
     task: Any = None   # the composed configs/task/<name>.yaml (not a training setting itself)
+    wm: str = "lewm"   # the task's world model (lewm, pldm): picks ckpt; the run records that checkpoint, not this name
     method: str = "gfn"  # gfn: the GFlowNet; bc: behavior cloning on expert plans; map: amortized MAP planning
     # (gplan/jax/baselines.py); ppo: PPO with a critic (gplan/jax/ppo.py)
-    ckpt: Path = MISSING  # LeWM *_object.ckpt (train.yaml: the task's, $STABLEWM_HOME/<task.wm>_object.ckpt)
+    ckpt: Path = MISSING  # world model *_object.ckpt (train.yaml: $STABLEWM_HOME/<task>/<wm>_object.ckpt)
     dataset: str = MISSING  # dataset name under $STABLEWM_HOME (train.yaml: the task's)
-    latents: Optional[Path] = None  # prefix of the precomputed embeddings (default: $STABLEWM_HOME/<dataset>_latents)
+    latents: Optional[Path] = None  # prefix of the precomputed embeddings (default: gplan.data.default_latents,
+    # $STABLEWM_HOME/<dataset>_latents for LeWM, <dataset>_<wm>_latents for another world model)
     goal_offset: int = 25  # goal = start + this many dataset steps
     holdout_frac: float = 0.0  # hold this fraction of episodes out of training (gplan.data.split_episodes), so
     # evaluate.py holdout_frac / split_seed can test on unseen episodes (0 = train on all)
     split_seed: int = 0  # seed of the episode split
     n_steps: int = 5  # planning horizon T
     frameskip: int = 5  # env steps per plan step: a plan step holds frameskip x the dataset's action dim values,
-    # which must be the input size of LeWM's action encoder
+    # which must be the input size of the world model's action encoder
     n_components: int = 1  # EXP mixture policy: Gaussians per plan step (1 = a single diagonal Gaussian)
     n_samples: int = 8  # plans sampled per (start, goal)
     beta: float = 1.0  # final cost temperature, per embedding dim (the raw cost is scaled by beta / embed_dim)
@@ -96,7 +98,8 @@ class EvalArgs:
     # training beta)
     task: Any = None  # the task (configs/task/<name>.yaml); the run's setting is its name, the preset
     # gplan.torch.evaluation.TASKS[name] (env, dataset, LeWM checkpoint, resets)
-    wm: Optional[str] = None  # LeWM ckpt name relative to $STABLEWM_HOME (default: from task)
+    wm: Optional[str] = None  # world model: checkpoint name relative to $STABLEWM_HOME, <task>/<name> (default: the
+    # task's LeWM); a bare name (wm=pldm) means <task>/<name>
     dataset: Optional[str] = None  # dataset name (default: from task)
     env: Optional[str] = None  # gymnasium env id (default: from task)
     num_eval: int = 50
@@ -135,12 +138,15 @@ CHOICES = {  # the allowed values of string settings
     "gflow_select": ("min-cost", "sample", "mean"),
     "refine_objective": ("target", "cost"),
 }
-NOT_ARGS = {TrainArgs: ("task",)}  # TrainArgs.task: the task's config, not a setting of the run
+NOT_ARGS = {TrainArgs: ("task", "wm")}  # the task's config and the world model's name pick settings (dataset,
+# ckpt), they are not settings of the run themselves
 
 ConfigStore.instance().store(name="train_args", node=TrainArgs)
 ConfigStore.instance().store(name="eval_args", node=EvalArgs)
 if not OmegaConf.has_resolver("stablewm_home"):
     OmegaConf.register_new_resolver("stablewm_home", lambda: str(STABLEWM_HOME))
+if not OmegaConf.has_resolver("run_tag"):
+    OmegaConf.register_new_resolver("run_tag", run_tag)  # configs/run.yaml: out / results of a world model
 
 
 def compose_config(name, overrides=()):

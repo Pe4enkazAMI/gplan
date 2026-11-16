@@ -1,7 +1,8 @@
-# scripts/run.py: the paper's runs for one task (configs/task): train every model (configs/model) and the
-# task's ablations, evaluate them (configs/eval), build the tables. Finished runs are skipped, so it can be
-# rerun after an interruption. E.g.
+# scripts/run.py: the paper's runs for one task (configs/task) and world model (wm): train every model
+# (configs/model) and the task's ablations, evaluate them (configs/eval), build the tables. Finished runs are
+# skipped, so it can be rerun after an interruption. E.g.
 #   python scripts/run.py task=pusht
+#   python scripts/run.py task=pusht wm=pldm   # -> outputs/pusht-pldm, results/pusht-pldm
 #   python scripts/run.py task=pusht stage=eval "eval_overrides={device:cuda}"
 #   python scripts/run.py task=pusht "only=[ppo,ppo-maxent,ppo-cost,ppo-cost-maxent]"   # just these models
 defaults:
@@ -12,11 +13,12 @@ defaults:
   - eval@evals.ablations: ablations
   - _self_
 
+wm: lewm                   # world model $STABLEWM_HOME/<task>/<wm>_object.ckpt: lewm or pldm
 stage: all                 # train, eval, tables or all
 dry_run: false             # print what would run, run nothing
 only: null                 # train and evaluate only these models / ablations (tables: all results)
-out: outputs/${task.name}        # checkpoints <out>/<model>-s<seed>.{eqx,json,pt,yaml}
-results: results/${task.name}    # <results>/<eval dir>/<run>.json, <results>/tables/<table>.{md,csv}
+out: outputs/${task.name}${run_tag:${wm}}        # checkpoints <out>/<model>-s<seed>.{eqx,json,pt,yaml}
+results: results/${task.name}${run_tag:${wm}}    # <results>/<eval dir>/<run>.json, <results>/tables/<table>.{md,csv}
 
 models: [gfn, gfn-mala, bc, map, ppo, ppo-maxent]   # configs/model
 seeds: [0, 1, 2]           # training seeds of every model

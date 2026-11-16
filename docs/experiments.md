@@ -12,10 +12,12 @@ python scripts/run.py task=tworoom stage=train      # one stage: train, eval or 
 python scripts/run.py task=tworoom dry_run=true     # print the commands, run nothing
 python scripts/run.py task=pusht "only=[ppo,ppo-maxent,ppo-cost,ppo-cost-maxent]"   # just these models
 python scripts/run.py task=pusht "eval_overrides={device:cuda}" "seeds=[0]"
+python scripts/run.py task=pusht wm=pldm            # the same runs with PLDM (README: "Another world model")
 ```
 
 -> `outputs/<task>/<model>-s<seed>.{eqx,json,pt,yaml}`, `results/<task>/<evaluation>/*.json`,
-`results/<task>/tables/<table>.{md,csv}` (also printed). Each run is a fresh `scripts/train.py` /
+`results/<task>/tables/<table>.{md,csv}` (also printed); with `wm=pldm`, `outputs/<task>-pldm` and
+`results/<task>-pldm`. Each run is a fresh `scripts/train.py` /
 `scripts/evaluate.py` process; `dry_run=true` shows their overrides, which reproduce a single run by
 hand.
 
@@ -23,8 +25,8 @@ hand.
 
 | File | Holds |
 | --- | --- |
-| `configs/run.yaml` | the runner: models, seeds, ablations on/off, episode split, eval seeds and episodes, wandb mode, the two refinement objectives, extra settings for every run (`train_overrides`, `eval_overrides`) |
-| `configs/task/<task>.yaml` | dataset, LeWM checkpoint, β, the GFlowNet schedule (`gfn`), what MALA adds (`mala`), PPO's length and policy (`ppo`), the baselines' length, the ablations (each a list of `train.py` overrides) |
+| `configs/run.yaml` | the runner: the world model (`wm`: `lewm` or `pldm`), models, seeds, ablations on/off, episode split, eval seeds and episodes, wandb mode, the two refinement objectives, extra settings for every run (`train_overrides`, `eval_overrides`) |
+| `configs/task/<task>.yaml` | dataset, β, the GFlowNet schedule (`gfn`), what MALA adds (`mala`), PPO's length and policy (`ppo`), the baselines' length, the ablations (each a list of `train.py` overrides) |
 | `configs/model/<model>.yaml` | a training method and its settings, taken from the task: `gfn`, `gfn-mala`, `bc`, `map`, `ppo`, `ppo-maxent` |
 | `configs/eval/*.yaml` | the evaluations: their runs (results file name, models, policies, refinement objective, settings), episodes and table |
 | `gplan/config.py` | every setting of `train.py` / `evaluate.py`, its type and default |

@@ -29,7 +29,7 @@ import jax
 import wandb
 
 from gplan.config import compose_config, script_overrides, to_args, TrainArgs, write_config
-from gplan.data import split_episodes, STABLEWM_HOME
+from gplan.data import default_latents, split_episodes
 from gplan.jax import checkpoint
 from gplan.jax.baselines import bc_loss, map_loss, train_baseline
 from gplan.jax.convert import load_lewm_predictor
@@ -68,7 +68,7 @@ def main():
     print("JAX devices:", jax.devices())
 
     cost_model = load_lewm_predictor(args.ckpt)  # torch is used only here, on CPU
-    pairs = LatentPairs(args.latents or STABLEWM_HOME / f"{args.dataset}_latents", args.goal_offset,
+    pairs = LatentPairs(args.latents or default_latents(args.dataset, args.ckpt), args.goal_offset,
                         expected_ckpt=args.ckpt)
     if args.holdout_frac > 0:
         train_eps, held_out = split_episodes(pairs.ep_idx, args.holdout_frac, args.split_seed)
