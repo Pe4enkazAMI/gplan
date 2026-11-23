@@ -48,7 +48,7 @@ gplan/
     checkpoint.py      save / load .eqx checkpoints, export the PyTorch .pt
 configs/             Hydra configs: train.yaml, evaluate.yaml, run.yaml; task/ (per task), model/ (per
                      training method), eval/ (the paper's evaluations)
-scripts/             train, evaluate, run (the paper's runs for one task); utilities: convert_lewm,
+scripts/             train, evaluate, run (the paper's runs for one task); utilities: convert_lewm, train_pldm,
                      download_data, encode_dataset, aggregate_results, export_planner, probe_headroom
 tests/               test_torch_* / test_jax_* per module (JAX checked against PyTorch), test_distributions,
                      test_jax_optimum / test_jax_baselines / test_jax_ppo (closed-form optima), test_config,
@@ -177,10 +177,30 @@ PLDM as stable-worldmodel implements it has LeWM's architecture (ViT-tiny encode
 projector, the same AdaLN predictor with a context of 3, the same planning cost); only its training loss
 differs (VICReg-style variance / covariance terms instead of SIGReg). So it runs through the same code:
 `wm=pldm` in `train.py`, `evaluate.py` and `run.py` picks `$STABLEWM_HOME/<task>/pldm_object.ckpt`.
-The le-wm README links the baseline checkpoints (Google Drive, `<name>_object.ckpt`); put each task's
-PLDM there. They are pickled with stable-worldmodel's own copies of the classes, which
-`gplan.torch.lewm.load_wm` loads into the le-wm classes, so no particular stable-worldmodel version is
-needed; a checkpoint of another architecture is refused.
+(`gplan.torch.lewm.load_wm` also loads checkpoints pickled with stable-worldmodel's own copies of the
+classes, whatever its version; a checkpoint of another architecture is refused.)
+
+No PLDM checkpoints are published, so we train them with stable-worldmodel's recipe: its
+`scripts/train/pldm.py` and config, on the same datasets (LeWM's data pipeline: frameskip 5, 3 context
+frames + 1 predicted, z-scored actions; AdamW 5e-5, batch 128, 100 epochs, bf16), with the loss
+prediction + 18 x variance + 0.7 x variance over time + 12 x covariance + 0.2 x temporal alignment.
+It needs a newer stable-worldmodel than evaluation (0.0.6), so it runs in its own environment:
+
+```bash
+git clone https://github.com/galilai-group/stable-worldmodel.git ~/stable-worldmodel
+git -C ~/stable-worldmodel checkout 21446f1          # the version scripts/train_pldm.sh was checked with
+python -m venv ~/venv-swm                            # install torch / torchvision as in gplan's environment, then
+~/venv-swm/bin/pip install -e "$HOME/stable-worldmodel[train,format]"
+```
+
+`scripts/train_pldm.sh <task>` trains, converts the last epoch's weights to
+`$STABLEWM_HOME/<task>/pldm_object.ckpt` (`convert_lewm.py --run-dir`; stable-worldmodel's environment has
+transformers 5, whose ViT weight names are mapped back) and encodes the task's dataset with it. Run it from
+this repository with gplan's environment active; extra arguments are Hydra overrides of `pldm.py`:
+
+```bash
+SWM_REPO=~/stable-worldmodel SWM_PYTHON=~/venv-swm/bin/python bash scripts/train_pldm.sh tworoom
+```
 
 Files made with PLDM carry its name; LeWM's keep theirs:
 
@@ -191,7 +211,7 @@ Files made with PLDM carry its name; LeWM's keep theirs:
 | `run.py` wandb run names | `<task>-<model>-s<seed>` | `<task>-pldm-<model>-s<seed>` |
 
 ```bash
-python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/pldm_object.ckpt
+python scripts/encode_dataset.py --dataset pusht_expert_train --ckpt $STABLEWM_HOME/pusht/pldm_object.ckpt  # (train_pldm.sh did)
 python scripts/train.py task=pusht wm=pldm model=gfn out=outputs/pusht-pldm/gfn-s0
 python scripts/evaluate.py task=pusht wm=pldm "policy=[gflow,cem]" planner=outputs/pusht-pldm/gfn-s0.pt
 python scripts/run.py task=pusht wm=pldm     # the paper's runs with PLDM

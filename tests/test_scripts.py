@@ -2,6 +2,7 @@
 real workflow on a toy STABLEWM_HOME (an 8x8-pixel dataset and the tiny LeWM from conftest)."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -10,8 +11,9 @@ import h5py
 import numpy as np
 import pytest
 import torch
-from conftest import IMG, make_wm, REPO, save_as_swm, script_env
+from conftest import IMG, load_script, make_wm, REPO, save_as_swm, script_env
 
+from gplan.torch.lewm import load_wm
 from gplan.torch.policy import load_planner
 
 pytestmark = pytest.mark.slow
@@ -244,3 +246,49 @@ def test_convert_lewm_builds_a_jepa_from_an_hf_config(tmp_path):
                      f"wm = load_wm({str(tmp_path / 'x_object.ckpt')!r}); "
                      "print(tuple(encode(wm, torch.randn(2, 3, 8, 8)).shape))"])
     assert out.strip().endswith("(2, 192)")
+
+
+def test_convert_lewm_reads_a_stable_worldmodel_training_run(tmp_path):
+    """--run-dir: the config.json and last weights_epoch_<n>.pt that stable-worldmodel's training scripts write
+    (here a PLDM's, its ViT under transformers-5 weight names) become <name>_object.ckpt with the same weights."""
+    pytest.importorskip("transformers")
+    config = {
+        "_target_": "stable_worldmodel.wm.pldm.pldm.PLDM",
+        "encoder": {"_target_": "stable_pretraining.backbone.utils.vit_hf", "size": "tiny", "patch_size": 4,
+                    "image_size": 8, "pretrained": False, "use_mask_token": False},
+        "predictor": {"_target_": "stable_worldmodel.wm.pldm.module.Predictor", "num_frames": 3, "input_dim": 192,
+                      "hidden_dim": 192, "output_dim": 192, "depth": 1, "heads": 2, "mlp_dim": 32, "dim_head": 8,
+                      "dropout": 0.1, "emb_dropout": 0.0},
+        "action_encoder": {"_target_": "stable_worldmodel.wm.pldm.module.Embedder", "input_dim": 10, "emb_dim": 192},
+        "projector": {"_target_": "stable_worldmodel.wm.pldm.module.MLP", "input_dim": 192, "output_dim": 192,
+                      "hidden_dim": 16, "norm_fn": {"_target_": "torch.nn.BatchNorm1d", "_partial_": True}},
+        "pred_proj": {"_target_": "stable_worldmodel.wm.pldm.module.MLP", "input_dim": 192, "output_dim": 192,
+                      "hidden_dim": 16, "norm_fn": {"_target_": "torch.nn.BatchNorm1d", "_partial_": True}},
+    }
+    v5_names = [  # transformers-4 ViT weight names -> transformers 5 (as stable-worldmodel's environment saves them)
+        (r"^encoder\.encoder\.layer\.(\d+)\.attention\.attention\.query\.", r"encoder.layers.\1.attention.q_proj."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.attention\.attention\.key\.", r"encoder.layers.\1.attention.k_proj."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.attention\.attention\.value\.", r"encoder.layers.\1.attention.v_proj."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.attention\.output\.dense\.", r"encoder.layers.\1.attention.o_proj."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.intermediate\.dense\.", r"encoder.layers.\1.mlp.fc1."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.output\.dense\.", r"encoder.layers.\1.mlp.fc2."),
+        (r"^encoder\.encoder\.layer\.(\d+)\.(layernorm_before|layernorm_after)\.", r"encoder.layers.\1.\2."),
+    ]
+    wm = load_script("convert_lewm").build_lewm(config)
+    for p in wm.parameters():
+        torch.nn.init.normal_(p)
+    run_dir = tmp_path / "checkpoints" / "toy" / "pldm"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.json").write_text(json.dumps(config))
+    torch.save({k: torch.zeros_like(v) for k, v in wm.state_dict().items()}, run_dir / "weights_epoch_95.pt")
+    renamed = {}
+    for key, value in wm.state_dict().items():
+        for pattern, repl in v5_names:
+            key = re.sub(pattern, repl, key)
+        renamed[key] = value
+    assert any(".q_proj." in k for k in renamed)
+    torch.save(renamed, run_dir / "weights_epoch_100.pt")
+
+    run([script("convert_lewm.py"), "--run-dir", str(run_dir), "--name", "toy/pldm"], tmp_path)
+    loaded, ref = load_wm(tmp_path / "toy" / "pldm_object.ckpt").state_dict(), wm.state_dict()
+    assert list(loaded) == list(ref) and all(torch.equal(loaded[k], ref[k]) for k in ref)  # epoch 100, names mapped
